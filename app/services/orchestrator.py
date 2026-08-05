@@ -38,13 +38,27 @@ class ChatOrchestrator:
         chat: MiniMaxChat | None = None,
     ):
         self.settings = settings or get_settings()
-        self.chroma = chroma or ChromaStore(self.settings)
+        # Lazy remote clients: Railway often cannot reach private Chroma/Neo4j.
+        # Eager connect would break SQL-only answers on every /ask.
+        self._chroma = chroma
+        self._neo4j = neo4j
         self.db = db or SQLiteRepo(self.settings)
         self.mysql = self.db
-        self.neo4j = neo4j or Neo4jRepo(self.settings)
         self.chat = chat or MiniMaxChat(self.settings)
         self.history: List[Dict[str, str]] = []
         self.last_dois: List[str] = []
+
+    @property
+    def chroma(self) -> ChromaStore:
+        if self._chroma is None:
+            self._chroma = ChromaStore(self.settings)
+        return self._chroma
+
+    @property
+    def neo4j(self) -> Neo4jRepo:
+        if self._neo4j is None:
+            self._neo4j = Neo4jRepo(self.settings)
+        return self._neo4j
 
     def reset(self) -> None:
         self.history.clear()

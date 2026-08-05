@@ -72,7 +72,9 @@ def health_ready() -> Dict[str, Any]:
         "collection": settings.chroma_collection,
     }
     try:
-        status["chroma_count"] = get_bot().chroma.count()
+        from app.services.chroma_store import ChromaStore
+
+        status["chroma_count"] = ChromaStore(settings).count()
     except Exception as e:
         status["ok"] = False
         status["chroma_error"] = str(e)

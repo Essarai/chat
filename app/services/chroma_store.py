@@ -17,12 +17,19 @@ class ChromaStore:
     ):
         self.settings = settings or get_settings()
         self.embeddings = embeddings or MiniMaxEmbeddings(self.settings)
-        self._client = chromadb.HttpClient(
-            host=self.settings.chroma_host,
-            port=self.settings.chroma_port,
-            headers={"Authorization": f"Bearer {self.settings.chroma_token}"},
-        )
-        self._collection = self._client.get_collection(self.settings.chroma_collection)
+        try:
+            self._client = chromadb.HttpClient(
+                host=self.settings.chroma_host,
+                port=self.settings.chroma_port,
+                headers={"Authorization": f"Bearer {self.settings.chroma_token}"},
+            )
+            self._collection = self._client.get_collection(self.settings.chroma_collection)
+        except Exception as e:
+            raise RuntimeError(
+                f"无法连接 Chroma ({self.settings.chroma_host}:{self.settings.chroma_port}): {e}. "
+                "若服务部署在 Railway，请确认云主机安全组对公网开放 Chroma 端口，"
+                "或改用公网可达的向量库地址。"
+            ) from e
 
     def count(self) -> int:
         return self._collection.count()
