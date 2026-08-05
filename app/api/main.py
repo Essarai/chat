@@ -49,11 +49,24 @@ class AskRequest(BaseModel):
 
 @app.get("/health")
 def health() -> Dict[str, Any]:
+    """Liveness probe for Railway — must not call Chroma/Neo4j (may be unreachable)."""
+    settings = get_settings()
+    return {
+        "ok": True,
+        "chat_model": settings.minimax_chat_model,
+        "embed_model": settings.minimax_embed_model,
+        "collection": settings.chroma_collection,
+        "sqlite_path": settings.sqlite_path,
+    }
+
+
+@app.get("/health/ready")
+def health_ready() -> Dict[str, Any]:
+    """Optional readiness check against remote dependencies."""
     settings = get_settings()
     status: Dict[str, Any] = {
         "ok": True,
         "chat_model": settings.minimax_chat_model,
-        "embed_model": settings.minimax_embed_model,
         "collection": settings.chroma_collection,
     }
     try:
