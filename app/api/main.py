@@ -12,7 +12,6 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.config import get_settings
-from app.services.orchestrator import ChatOrchestrator
 
 WEB_DIR = Path(__file__).resolve().parents[2] / "web"
 
@@ -32,7 +31,10 @@ app.add_middleware(
 
 
 @lru_cache()
-def get_bot() -> ChatOrchestrator:
+def get_bot():
+    # Lazy import: chromadb/langgraph are heavy and would block Railway healthchecks.
+    from app.services.orchestrator import ChatOrchestrator
+
     return ChatOrchestrator(get_settings())
 
 
