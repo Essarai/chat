@@ -19,22 +19,19 @@
   let yearlyRowsCache = [];
 
   const PRESETS = [
-    { q: "徐建明全部发文", label: "徐建明全部发文" },
-    { q: "徐建明合作的作者所属机构情况", label: "徐建明合作的作者所属机构情况" },
-    {
-      q: "徐建明和施加春合作的发文有哪些",
-      label: "徐建明和施加春合作的发文有哪些",
-    },
+    { q: "徐建明全部发文", label: "作者发文" },
+    { q: "徐建明合作的作者所属机构情况", label: "合作机构" },
+    { q: "徐建明和施加春合作的发文有哪些", label: "合著论文" },
   ];
 
   const COLORS = {
-    author: "#1f6b57",
-    collaborator: "#4d9a7f",
-    paper: "#b87333",
-    keyword: "#5b7c99",
-    institution: "#7a6a4f",
-    fund: "#8a5a7a",
-    clc: "#6b6b6b",
+    author: "#1a73e8",
+    collaborator: "#4285f4",
+    paper: "#e37400",
+    keyword: "#188038",
+    institution: "#9334e6",
+    fund: "#d93025",
+    clc: "#5f6368",
   };
 
   const GROUP_LABELS = {
@@ -611,6 +608,7 @@
   async function askQuestion(question) {
     const q = question.trim();
     if (!q) return;
+    setPresetsVisible(false);
     appendBubble("user", escapeHtml(q));
     questionEl.value = "";
     askBtn.disabled = true;
@@ -919,22 +917,29 @@
     }
   }
 
-  function showWelcome() {
-    const items = PRESETS.map(
-      (p, i) =>
-        `<button type="button" class="welcome-preset" data-q="${escapeHtml(p.q)}"><span class="n">${i + 1}.</span> ${escapeHtml(p.label)}</button>`
-    ).join("");
-    const html = `
-      <div class="md">
-        <p>你好，我是<strong>青禾</strong>——《浙江大学学报（农业与生命科学版）》的知识助手。</p>
-        <p>可以帮你查作者发文与合作机构，也可以看研究趋势、浏览知识图谱。直接提问，或点下面的示例开始：</p>
-      </div>
-      <div class="welcome-presets">${items}</div>
-    `;
-    const bubble = appendBubble("bot", html);
-    bubble.querySelectorAll(".welcome-preset").forEach((btn) => {
+  function setPresetsVisible(visible) {
+    const el = $("#presets");
+    if (!el) return;
+    el.hidden = !visible;
+  }
+
+  function renderPresets() {
+    const el = $("#presets");
+    if (!el) return;
+    el.innerHTML =
+      `<span class="presets-label">示例</span>` +
+      PRESETS.map(
+        (p) =>
+          `<button type="button" data-q="${escapeHtml(p.q)}">${escapeHtml(p.label)}</button>`
+      ).join("");
+    el.querySelectorAll("button").forEach((btn) => {
       btn.addEventListener("click", () => askQuestion(btn.dataset.q || ""));
     });
+  }
+
+  function showWelcome() {
+    messagesEl.innerHTML = "";
+    setPresetsVisible(true);
   }
 
   function stopGraph() {
@@ -1461,5 +1466,6 @@
     }
   });
 
+  renderPresets();
   showWelcome();
 })();

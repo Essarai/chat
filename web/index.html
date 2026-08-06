@@ -3,19 +3,26 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>青禾</title>
+    <title>期刊知识助手</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Noto+Serif+SC:wght@600&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Roboto:wght@400;500&display=swap"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
     <header class="top">
-      <div class="brand">青禾</div>
-      <nav class="tabs" role="tablist">
+      <label class="journal-switch">
+        <span class="brand">知识助手</span>
+        <select id="journal-select" aria-label="选择期刊">
+          <option value="ZDXBNXB" selected>
+            浙江大学学报（农业与生命科学版）
+          </option>
+        </select>
+      </label>
+      <nav class="tabs" role="tablist" aria-label="功能">
         <button class="tab is-active" data-tab="ask" type="button">问答</button>
         <button class="tab" data-tab="trends" type="button">趋势</button>
         <button class="tab" data-tab="graph" type="button">图谱</button>
@@ -26,31 +33,31 @@
       <section id="panel-ask" class="panel is-active" role="tabpanel">
         <div class="chat-pane">
           <div id="messages" class="messages" aria-live="polite"></div>
-          <form id="ask-form" class="ask-form">
-            <input
-              id="question"
-              name="question"
-              type="text"
-              placeholder="提问…"
-              autocomplete="off"
-              required
-            />
-            <button type="submit" id="ask-btn">发送</button>
-            <button type="button" id="reset-btn" class="ghost">清空</button>
-          </form>
+          <div class="composer">
+            <form id="ask-form" class="ask-form">
+              <input
+                id="question"
+                name="question"
+                type="text"
+                placeholder="输入问题"
+                autocomplete="off"
+                required
+              />
+              <button type="submit" id="ask-btn">发送</button>
+              <button type="button" id="reset-btn" class="ghost">清空</button>
+            </form>
+            <div id="presets" class="presets" aria-label="示例问题"></div>
+          </div>
         </div>
       </section>
 
       <section id="panel-trends" class="panel" role="tabpanel" hidden>
-        <p id="trends-hint" class="status">
-          悬停查看数值；点击年份可筛选关键词；点击关键词可跳转图谱。
-        </p>
         <div class="charts">
           <figure class="chart-block">
             <figcaption>
               年度发文
               <button type="button" id="clear-year-filter" class="ghost tiny" hidden>
-                清除年份筛选
+                清除筛选
               </button>
             </figcaption>
             <div id="yearly-chart" class="chart-svg"></div>
@@ -71,7 +78,12 @@
             <option value="institution">机构</option>
             <option value="paper">论文</option>
           </select>
-          <input id="graph-query" type="text" value="朱军" placeholder="作者 / 关键词 / 机构 / DOI" />
+          <input
+            id="graph-query"
+            type="text"
+            value=""
+            placeholder="作者 / 关键词 / 机构 / DOI"
+          />
           <button type="submit">绘制</button>
         </form>
         <div class="graph-stage">

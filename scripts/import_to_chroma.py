@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """
-Embed rag_cleaned/documents.jsonl via MiniMax and upsert into remote Chroma.
+Embed rag_cleaned/documents.jsonl via MiniMax and upsert into Chroma.
+
+Targets:
+  --target http   → chromadb.HttpClient (self-hosted)
+  --target cloud  → chromadb.CloudClient (Chroma Cloud)
 
 Does NOT touch Neo4j or MySQL.
 """
@@ -21,10 +25,20 @@ import chromadb
 ROOT = Path(__file__).resolve().parents[1]
 DOCS_JSONL = ROOT / "rag_cleaned" / "documents.jsonl"
 
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(ROOT / ".env")
+except Exception:
+    pass
+
 DEFAULT_CHROMA_HOST = os.getenv("CHROMA_HOST", "182.92.0.163")
 DEFAULT_CHROMA_PORT = int(os.getenv("CHROMA_PORT", "8000"))
 DEFAULT_CHROMA_TOKEN = os.getenv("CHROMA_TOKEN", "YourStrongSecretKey123!")
 DEFAULT_COLLECTION = os.getenv("CHROMA_COLLECTION", "journal_papers")
+DEFAULT_CLOUD_API_KEY = os.getenv("CHROMA_CLOUD_API_KEY", "")
+DEFAULT_CLOUD_TENANT = os.getenv("CHROMA_CLOUD_TENANT", "")
+DEFAULT_CLOUD_DATABASE = os.getenv("CHROMA_CLOUD_DATABASE", "journals")
 
 DEFAULT_MINIMAX_KEY = os.getenv(
     "MINIMAX_API_KEY",
@@ -148,11 +162,27 @@ def chunks(items: list, size: int):
         yield items[i : i + size]
 
 
-def get_client(host: str, port: int, token: str):
+def get_client(args):
+    if getattr(args, "target", "http") == "cloud":
+        if not args.cloud_api_key or not args.cloud_tenant:
+            raise SystemExit(
+                "Cloud target requires --cloud-api-key / --cloud-tenant "
+                "(or CHROMA_CLOUD_API_KEY / CHROMA_CLOUD_TENANT in .env)"
+            )
+        print(
+            f"Chroma Cloud: database={args.cloud_database} "
+            f"tenant={args.cloud_tenant[:8]}…"
+        )
+        return chromadb.CloudClient(
+            api_key=args.cloud_api_key,
+            tenant=args.cloud_tenant,
+            database=args.cloud_database,
+        )
+    print(f"Chroma Http: {args.host}:{args.port}")
     return chromadb.HttpClient(
-        host=host,
-        port=port,
-        headers={"Authorization": f"Bearer {token}"},
+        host=args.host,
+        port=args.port,
+        headers={"Authorization": f"Bearer {args.token}"},
     )
 
 
@@ -164,8 +194,11 @@ def import_docs(args):
     docs = load_docs(DOCS_JSONL)
     print(f"Loaded {len(docs)} docs from {DOCS_JSONL}")
 
-    client = get_client(args.host, args.port, args.token)
-    print("Chroma heartbeat:", client.heartbeat())
+    client = get_client(args)
+    try:
+        print("Chroma heartbeat:", client.heartbeat())
+    except Exception as e:
+        print(f"Chroma heartbeat skipped: {e}")
 
     if args.recreate:
         try:
@@ -174,22 +207,29 @@ def import_docs(args):
         except Exception:
             pass
 
-    collection = client.get_or_create_collection(
-        name=args.collection,
-        metadata={
-            "hnsw:space": "cosine",
-            "source": "rag_cleaned/documents.jsonl",
-            "embedding_model": args.model,
-            "embedding_provider": "minimax",
-        },
-    )
+    # Cloud may reject custom HNSW metadata keys; keep http-only extras soft.
+    meta = {
+        "source": "rag_cleaned/documents.jsonl",
+        "embedding_model": args.model,
+        "embedding_provider": "minimax",
+    }
+    if args.target == "http":
+        meta["hnsw:space"] = "cosine"
+    try:
+        collection = client.get_or_create_collection(
+            name=args.collection,
+            metadata=meta,
+        )
+    except Exception:
+        collection = client.get_or_create_collection(name=args.collection)
 
     # Resume support: skip IDs already present when not recreating
     existing = set()
     if not args.recreate and collection.count() > 0:
         print(f"Existing count={collection.count()}, scanning IDs for resume ...")
         offset = 0
-        page = 500
+        # Chroma Cloud free tier often caps Get limit around 300
+        page = min(int(getattr(args, "get_page", 100) or 100), 300)
         while True:
             got = collection.get(include=[], limit=page, offset=offset)
             ids = got.get("ids") or []
@@ -278,14 +318,29 @@ def import_docs(args):
 
 def main():
     p = argparse.ArgumentParser(description="MiniMax embed -> Chroma import")
+    p.add_argument(
+        "--target",
+        choices=("http", "cloud"),
+        default=os.getenv("CHROMA_TARGET", "http"),
+        help="http=self-hosted HttpClient; cloud=Chroma CloudClient",
+    )
     p.add_argument("--host", default=DEFAULT_CHROMA_HOST)
     p.add_argument("--port", type=int, default=DEFAULT_CHROMA_PORT)
     p.add_argument("--token", default=DEFAULT_CHROMA_TOKEN)
     p.add_argument("--collection", default=DEFAULT_COLLECTION)
+    p.add_argument("--cloud-api-key", default=DEFAULT_CLOUD_API_KEY)
+    p.add_argument("--cloud-tenant", default=DEFAULT_CLOUD_TENANT)
+    p.add_argument("--cloud-database", default=DEFAULT_CLOUD_DATABASE)
     p.add_argument("--api-key", default=DEFAULT_MINIMAX_KEY)
     p.add_argument("--embed-url", default=DEFAULT_MINIMAX_URL)
     p.add_argument("--model", default=DEFAULT_MODEL)
     p.add_argument("--batch", type=int, default=BATCH)
+    p.add_argument(
+        "--get-page",
+        type=int,
+        default=100,
+        help="page size when scanning existing IDs (Cloud Get limit often ≤300)",
+    )
     p.add_argument("--limit", type=int, default=0, help="debug: only first N docs")
     p.add_argument(
         "--recreate",
