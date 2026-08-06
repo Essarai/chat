@@ -9,7 +9,7 @@ from app.agents.state import JournalState
 from app.config import get_settings
 from app.services.minimax_chat import MiniMaxChat
 
-YEAR_RANGE_RE = re.compile(r"(近|最近)?\s*(\d{1,2})\s*年")
+YEAR_RANGE_RE = re.compile(r"(?:近|最近|过去|前)\s*(\d{1,2})\s*年")
 YEAR_SPAN_RE = re.compile(r"(20\d{2})\s*[-~到至]\s*(20\d{2})")
 # "和/与/跟 + 姓名 + 合作" 优先，避免把「和」吃进姓名
 NAME_WITH_PREP_RE = re.compile(
@@ -31,6 +31,13 @@ AUTHOR_COLLAB_INST_RE = re.compile(
     r"([一-龥A-Za-z·]{2,4})(?:老师|教授|研究员)?(?:的)?合作(?:者|的作者)?.*"
     r"(?:所属)?(?:机构|单位)"
 )
+# 徐建明和施加春合作的发文 / 徐建明与施加春合著论文
+AUTHOR_PAIR_RE = re.compile(
+    r"([一-龥A-Za-z·]{2,4})(?:老师|教授|研究员)?"
+    r"\s*(?:和|与|跟)\s*"
+    r"([一-龥A-Za-z·]{2,4})(?:老师|教授|研究员)?"
+    r"(?:的)?(?:合作|合著|共著)"
+)
 
 
 def extract_year_window(question: str, default_last_n: Optional[int] = None):
@@ -39,7 +46,7 @@ def extract_year_window(question: str, default_last_n: Optional[int] = None):
         return int(m.group(1)), int(m.group(2))
     m = YEAR_RANGE_RE.search(question)
     if m:
-        n = int(m.group(2))
+        n = int(m.group(1))
         end = datetime.now().year
         return end - n + 1, end
     if default_last_n:
@@ -75,10 +82,66 @@ _BAD_AUTHOR_NAMES = {
     "相关",
     "热门",
     "主要",
+    "核心",
+    "代表",
+    "表性",
+    "表性研究",  # from「代表性研究机构」false positive
+    "研究",
+    "机构",
+    "阶段",
+    "历程",
+    "方向",
+    "演变",
+    "趋势",
+    "期刊",
+    "学术",
+    "发展",
+    "该刊",
 }
 
 
+def _looks_like_person_name(name: str) -> bool:
+    if not name or name in _BAD_AUTHOR_NAMES:
+        return False
+    if name.endswith("年") or re.match(r"^近\d", name):
+        return False
+    # reject abstract nouns commonly glued before 机构/研究
+    if re.search(
+        r"(研究|机构|单位|方向|趋势|历程|阶段|学科|期刊|论文|作者|核心|代表|表性|演变|发展)",
+        name,
+    ):
+        return False
+    return 2 <= len(name) <= 4
+
+
+def extract_author_pair(question: str) -> Optional[tuple]:
+    """Return (name_a, name_b) for「A和B合作/合著…」questions."""
+    m = AUTHOR_PAIR_RE.search(question or "")
+    if not m:
+        return None
+    a = _clean_name(m.group(1))
+    b = _clean_name(m.group(2))
+    if not (_looks_like_person_name(a) and _looks_like_person_name(b)):
+        return None
+    if a == b:
+        return None
+    return a, b
+
+
 def extract_author_name(question: str) -> Optional[str]:
+    # Macro journal questions never imply a person author
+    if re.search(
+        r"(发展历程|演变趋势|研究方向|学术发展|过去\d+年|近\d+年).*(期刊|本刊|学报)?|"
+        r"(核心作者|代表性研究机构|各阶段)",
+        question or "",
+    ) and not re.search(r"[一-龥]{2,4}(?:老师|教授)", question or ""):
+        # still allow explicit「某某老师」below via patterns; skip loose 机构 matches
+        pass
+
+    # Pair questions are handled separately; do not collapse to one name.
+    if extract_author_pair(question):
+        return None
+
     for pattern in (
         NAME_WITH_PREP_RE,
         AUTHOR_COLLAB_INST_RE,
@@ -91,12 +154,12 @@ def extract_author_name(question: str) -> Optional[str]:
         if not m:
             continue
         name = _clean_name(m.group(1))
-        if not name or name in _BAD_AUTHOR_NAMES:
+        if not _looks_like_person_name(name):
             continue
-        if name.endswith("年") or re.match(r"^近\d", name):
+        # For NAME_RE (…机构), require real person context, not「代表性研究机构」
+        if pattern is NAME_RE and re.search(r"代表性|研究机构|核心作者", question or ""):
             continue
-        if 2 <= len(name) <= 4:
-            return name
+        return name
     return None
 
 
@@ -155,15 +218,21 @@ def extract_keywords(question: str) -> list:
 
 
 def regex_extract(question: str, prior_dois: Optional[List[str]] = None) -> Dict[str, Any]:
+    pair = extract_author_pair(question)
     author = extract_author_name(question)
     y0, y1 = extract_year_window(question)
-    return {
+    out: Dict[str, Any] = {
         "author_name": author,
         "year_start": y0,
         "year_end": y1,
-        "keywords": extract_keywords(question),
+        "keywords": extract_keywords(question) if not pair else [],
         "dois": list(prior_dois or []),
     }
+    if pair:
+        out["author_name"] = pair[0]
+        out["author_name_b"] = pair[1]
+        out["author_names"] = [pair[0], pair[1]]
+    return out
 
 
 def _parse_json_blob(raw: str) -> Dict[str, Any]:
@@ -213,6 +282,7 @@ def llm_confirm_entities(
 只输出 JSON，不要解释：
 {{
   "author_name": "中文姓名或null",
+  "author_name_b": "第二作者中文姓名或null",
   "year_start": 2017或null,
   "year_end": 2026或null,
   "keywords": ["主题词"],
@@ -223,16 +293,19 @@ def llm_confirm_entities(
 规则：
 1. author_name 只能是真实人名，不要带「和/与/跟/的/老师」等虚词。
 2. 若问题没有明确作者，author_name=null。
-3. intents 可多选：
+3. 若问题是「A和B合作/合著的发文/论文」，必须同时填 author_name=A、author_name_b=B，intents=["sql"]，不要只保留一人。
+4. intents 可多选：
    - 统计分析/趋势/发文量/热词 → sql
    - 某位作者的发文情况/个人统计 → sql（务必抽出 author_name）
    - 按关键词查作者/查哪些人发过某主题 → sql，keywords 填主题词（如「番茄」），不要 rag
    - 合作者/合著/关系网络 → kg
    - 论文内容/主题研究 → rag
    - 问合作者「来自哪些机构/单位分布」→ 必须同时包含 kg 和 sql
-4. 年份仅在问题明确提到时填写；「近十年」可换算为起止年。
-5. 若问题是「某某发文情况/概况」，author_name=该人名，intents 至少含 sql。
-6. keywords 只要核心主题词（如番茄），不要整句残留。
+5. 年份仅在问题明确提到时填写；「近十年/过去20年」可换算为起止年。
+6. 若问题是「某某发文情况/概况」，author_name=该人名，intents 至少含 sql。
+7. keywords 只要核心主题词（如番茄），不要整句残留。
+8. 问期刊发展历程/演变趋势/各阶段核心作者与机构时：author_name=null，intents 只用 sql，不要 rag。
+9. 禁止把「代表性研究机构」误抽成作者名「表性研究」。
 
 用户问题：{question}
 正则草稿：{json.dumps(draft, ensure_ascii=False)}
@@ -248,10 +321,22 @@ def llm_confirm_entities(
     data = _parse_json_blob(raw)
 
     author = _normalize_author(data.get("author_name"))
+    if author and not _looks_like_person_name(author):
+        author = None
+    # Macro overview questions: never keep a person author
+    if re.search(
+        r"(发展历程|演变趋势|学术发展|各阶段|核心作者|代表性研究机构)",
+        question or "",
+    ):
+        author = None
     y0 = _normalize_year(data.get("year_start"))
     y1 = _normalize_year(data.get("year_end"))
     if y0 and y1 and y0 > y1:
         y0, y1 = y1, y0
+    # Prefer regex year window for「过去/近 N 年」
+    ry0, ry1 = extract_year_window(question)
+    if ry0 and ry1 and re.search(r"(过去|近|最近)\s*\d+\s*年", question or ""):
+        y0, y1 = ry0, ry1
 
     keywords = data.get("keywords")
     if not isinstance(keywords, list):
@@ -284,7 +369,7 @@ def llm_confirm_entities(
         if i not in seen:
             seen.append(i)
 
-    return {
+    out = {
         "author_name": author,
         "year_start": y0,
         "year_end": y1,
@@ -294,6 +379,8 @@ def llm_confirm_entities(
         "extract_meta": {
             "regex_draft": {
                 "author_name": draft.get("author_name"),
+                "author_name_b": draft.get("author_name_b"),
+                "author_names": draft.get("author_names"),
                 "year_start": draft.get("year_start"),
                 "year_end": draft.get("year_end"),
                 "keywords": draft.get("keywords"),
@@ -302,6 +389,33 @@ def llm_confirm_entities(
             "fixes": data.get("fixes") or "",
         },
     }
+    # Preserve / restore pair fields — LLM must not collapse「A和B合作」to one author.
+    return _restore_author_pair(question, out, draft)
+
+
+def _restore_author_pair(
+    question: str, entities: Dict[str, Any], draft: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    out = dict(entities or {})
+    pair = extract_author_pair(question)
+    if not pair:
+        draft = draft or {}
+        if draft.get("author_name_b") and draft.get("author_name"):
+            pair = (draft["author_name"], draft["author_name_b"])
+    if not pair:
+        return out
+    a, b = pair
+    out["author_name"] = a
+    out["author_name_b"] = b
+    out["author_names"] = [a, b]
+    # Pair coauthor paper questions are SQL intersection lookups.
+    if re.search(r"发文|论文|著作|文章|文献|哪些", question or ""):
+        intents = [i for i in (out.get("confirmed_intents") or []) if i in {"sql", "kg", "rag"}]
+        if "sql" not in intents:
+            intents = ["sql"] + intents
+        out["confirmed_intents"] = intents
+        out["keywords"] = []
+    return out
 
 
 def understand_node(state: JournalState) -> Dict[str, Any]:
@@ -321,4 +435,5 @@ def understand_node(state: JournalState) -> Dict[str, Any]:
             "llm_confirmed": False,
             "fixes": f"llm确认失败，沿用正则: {e}",
         }
+    entities = _restore_author_pair(question, entities, draft)
     return {"entities": entities}

@@ -3,14 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterator, List, Optional
 
-from app.agents.generate import finalize_answer, stream_generate
-from app.agents.graph import prepare_journal_agent, run_journal_agent
-from app.agents.kg_agent import run_kg_agent
-from app.agents.rag_agent import run_rag_agent
-from app.agents.sql_agent import run_sql_agent
-from app.agents.understand import extract_year_window, understand_node
+from app.agents.controller import prepare_journal_agent, run_journal_agent
+from app.agents.fusion import finalize_answer, stream_generate
+from app.agents.understand import extract_year_window, regex_extract
+from app.capabilities import kg_capability, rag_capability, sql_capability
 from app.config import Settings, get_settings
-from app.services.chroma_store import ChromaStore
 from app.services.minimax_chat import MiniMaxChat
 from app.services.neo4j_repo import Neo4jRepo
 from app.services.sqlite_repo import SQLiteRepo
@@ -27,35 +24,30 @@ class AskResult:
 
 
 class ChatOrchestrator:
-    """Facade over LangGraph multi-agent pipeline + direct tool helpers."""
+    """Facade over Controller Agent pipeline + capability helpers."""
 
     def __init__(
         self,
         settings: Settings | None = None,
-        chroma: ChromaStore | None = None,
-        db: SQLiteRepo | None = None,
-        neo4j: Neo4jRepo | None = None,
         chat: MiniMaxChat | None = None,
     ):
         self.settings = settings or get_settings()
-        # Lazy remote clients: Railway often cannot reach private Chroma/Neo4j.
-        # Eager connect would break SQL-only answers on every /ask.
-        self._chroma = chroma
-        self._neo4j = neo4j
-        self.db = db or SQLiteRepo(self.settings)
-        self.mysql = self.db
         self.chat = chat or MiniMaxChat(self.settings)
         self.history: List[Dict[str, str]] = []
         self.last_dois: List[str] = []
+        self._db: SQLiteRepo | None = None
+        self._neo4j: Neo4jRepo | None = None
 
     @property
-    def chroma(self) -> ChromaStore:
-        if self._chroma is None:
-            self._chroma = ChromaStore(self.settings)
-        return self._chroma
+    def db(self) -> SQLiteRepo:
+        """SQLite repo for /trends APIs (lazy)."""
+        if self._db is None:
+            self._db = SQLiteRepo(self.settings)
+        return self._db
 
     @property
     def neo4j(self) -> Neo4jRepo:
+        """Neo4j repo for /graph APIs (lazy)."""
         if self._neo4j is None:
             self._neo4j = Neo4jRepo(self.settings)
         return self._neo4j
@@ -65,22 +57,39 @@ class ChatOrchestrator:
         self.last_dois.clear()
 
     def search(self, query: str, top_k: Optional[int] = None) -> List[Dict[str, Any]]:
-        data = run_rag_agent(query, top_k=top_k)
+        result = rag_capability.invoke(
+            "semantic_search", question=query, top_k=top_k
+        )
+        data = result.get("data") or {}
         hits = data.get("hits") or []
         self.last_dois = [h["doi"] for h in hits if h.get("doi")]
         return hits
 
     def trends(self, question: str = "") -> Dict[str, Any]:
         y0, y1 = extract_year_window(question or "近十年", default_last_n=10)
-        return run_sql_agent(
-            question or "近十年",
-            {"year_start": y0, "year_end": y1},
+        result = sql_capability.invoke(
+            "execute_plan",
+            question=question or "近十年",
+            entities={"year_start": y0, "year_end": y1},
+            plan={
+                "task": "generic",
+                "sql_ops": ["yearly_counts", "top_keywords"],
+                "year_start": y0,
+                "year_end": y1,
+            },
         )
+        return result.get("data") or {}
 
     def graph_lookup(self, question: str) -> Dict[str, Any]:
-        ents = understand_node({"question": question}).get("entities") or {}
-        ents["dois"] = self.last_dois
-        return run_kg_agent(question, ents, self.last_dois)
+        ents = regex_extract(question, self.last_dois)
+        result = kg_capability.invoke(
+            "execute_plan",
+            question=question,
+            entities=ents,
+            plan={"kg_ops": ["author_ego"] if ents.get("author_name") else ["keyword_ego"]},
+            last_dois=self.last_dois,
+        )
+        return result.get("data") or {}
 
     def _pack_result(self, question: str, final: Dict[str, Any], answer: str) -> AskResult:
         intents = final.get("intents") or ["rag"]
@@ -110,6 +119,12 @@ class ChatOrchestrator:
             evidence={
                 "intents": intents,
                 "route_reason": final.get("route_reason"),
+                "route": final.get("route"),
+                "query_plan": final.get("query_plan"),
+                "goal": final.get("goal"),
+                "stage": final.get("stage"),
+                "evidence_bundle": final.get("evidence_bundle"),
+                "react_trace": final.get("react_trace"),
                 "sql": final.get("sql_evidence"),
                 "kg": final.get("kg_evidence"),
                 "rag": final.get("rag_evidence"),
@@ -150,8 +165,7 @@ class ChatOrchestrator:
                 yield {"type": "delta", "text": delta}
         except Exception as e:
             if chunks:
-                # partial answer still useful
-                answer = finalize_answer("".join(chunks), intents)
+                answer = finalize_answer("".join(chunks), intents, prepared)
                 result = self._pack_result(question, prepared, answer)
                 yield {
                     "type": "done",
@@ -164,7 +178,7 @@ class ChatOrchestrator:
                 yield {"type": "error", "message": str(e)}
             return
 
-        answer = finalize_answer("".join(chunks), intents)
+        answer = finalize_answer("".join(chunks), intents, prepared)
         result = self._pack_result(question, prepared, answer)
         yield {
             "type": "done",

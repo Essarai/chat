@@ -1,0 +1,57 @@
+from __future__ import annotations
+
+from typing import Any, Dict
+
+from app.agents.state import JournalState
+from app.capabilities import sql_capability
+
+
+def run_sql_agent(
+    question: str,
+    entities: Dict[str, Any] | None = None,
+    query_plan: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    plan = query_plan or {}
+    if plan.get("sql_ops") or plan.get("task") in {
+        "yearly_growth",
+        "topic_evolution",
+        "keyword_collab",
+        "top_directions_with_papers",
+        "top_teams",
+        "journal_overview",
+        "author_profile",
+        "keyword_authors",
+    }:
+        result = sql_capability.invoke(
+            "execute_plan",
+            question=question,
+            entities=entities,
+            plan=plan,
+        )
+    else:
+        result = sql_capability.invoke(
+            "legacy",
+            question=question,
+            entities=entities,
+        )
+    if not result.get("ok"):
+        return {"error": result.get("error"), "source": "sql_capability"}
+    return result.get("data") or {}
+
+
+def sql_agent_node(state: JournalState) -> Dict[str, Any]:
+    intents = state.get("intents") or []
+    plan = state.get("query_plan") or {}
+    if "sql" not in intents and "sql" not in (plan.get("sources") or []):
+        return {}
+    try:
+        data = run_sql_agent(
+            state.get("question") or "",
+            state.get("entities"),
+            plan,
+        )
+        return {"sql_evidence": data}
+    except Exception as e:
+        errors = list(state.get("errors") or [])
+        errors.append(f"sql_agent: {e}")
+        return {"sql_evidence": {"error": str(e)}, "errors": errors}

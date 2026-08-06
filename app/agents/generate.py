@@ -3,63 +3,105 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, Iterator, List, Optional
 
+from app.agents.evidence_guard import (
+    build_evidence_ledger,
+    enforce_evidence_constraints,
+)
 from app.agents.state import JournalState
 from app.config import get_settings
 from app.services.minimax_chat import MiniMaxChat
 from app.utils import doi_url
 
-SYSTEM_PROMPT = """你是《浙江大学学报（农业与生命科学版）》的 AI 期刊知识助手。
-请严格基于提供的多路证据（[SQL] / [KG] / [RAG]）回答。
+SYSTEM_PROMPT = """你是《浙江大学学报（农业与生命科学版）》的资深学术分析助手。
+请严格基于多路证据（[SQL] / [KG] / [RAG]）与「证据约束」清单综合推理后作答。
 
-通用要求：
-1. 中文，结论优先，简洁准确；可用 Markdown（标题、加粗、表格）。
-2. 凡列举论文、合作者、机构，必须使用 Markdown 有序列表，每条一行：
-   `1. **名称**（补充信息）：详情`
-   禁止写成「姓名」下一行再写「- 所属机构: …」这种无序号格式。
-3. 数字必须严格来自证据；禁止把【全刊统计】当成某位作者的个人数据。
-4. 若证据标明【作者个人统计】，所有发文量/关键词/基金数字只能用该块。
-5. 不要编造论文、DOI、链接或机构人数。
-6. 禁止输出「参考文献」「参考资料」章节与 HTML。
-7. 禁止提及路由、意图、Agent、SQL/KG/RAG 管道等内部实现信息。
+写作目标（升维，不是数据报表）：
+1. 先给洞察结论（趋势、格局、机制/网络含义），再给必要证据支撑；禁止逐年逐条流水账。
+2. 把 SQL 统计、KG 邻域（作者/机构/共现词/合作）与 RAG 内容串成一条叙事，而不是分栏罗列。
+3. 数字、论文题名、年份、DOI 只能来自证据约束清单；清单外一律不得出现。
+4. 中文，结论优先；可用 Markdown（标题、加粗、少量表格）。名单用有序列表。
+5. 禁止编造论文/DOI/链接/人数；禁止「参考文献」章节与 HTML。
+6. 禁止提及路由、意图、Agent、SQL/KG/RAG 管道等内部实现信息。
 
-按问题类型：
-- 作者发文：论文用有序列表，证据中的论文全部列出。
-- 合作者/所属机构：用有序列表，格式 `1. **姓名**（N篇）：机构A / 机构B`。
-- 链接：DOI 用纯文本；全文用 `[查看全文](url)`。
-- 机构名称若明显为同一单位不同写法，可合并表述并说明。
+证据硬约束（生成时自检）：
+- 每个统计数字须能在 SQL/KG 证据中找到对应；
+- 每篇论文引用须存在于允许 DOI/题名列表；
+- 论文年份须落在允许时间窗内（若已知）；
+- DOI 必须与证据完全匹配，不得改写或拼接。
+
+按问题类型补充：
+- 作者发文/合作者：有序列表；合作者格式 `1. **姓名**（N篇）：机构A / 机构B`。
+- 主题演变/合作网络：突出阶段跃迁、核心节点与邻域结构，少堆原始计数。
+- 链接：DOI 纯文本；全文用 `[查看全文](url)`。
 """
 
 
-def _build_instruction(intents: List[str], evidence: str = "") -> str:
+def _build_instruction(intents: List[str], evidence: str = "", task: str = "") -> str:
     has_rag = "rag" in intents
     only_struct = bool(intents) and not has_rag
     author_scoped = "【作者个人统计" in (evidence or "")
+    insight = (
+        "回答形态：洞察式综述（结论→机制/格局→关键证据），"
+        "禁止写成「年份: N篇」逐行数据报告；"
+        "必须吸收 [KG] 邻域信息（若有）解释合作/机构/共现结构；"
+        "引用论文前核对证据约束中的 DOI/年份。"
+    )
     if author_scoped:
         return (
             "本题为作者个人/合作者结构化统计。数字必须来自【作者个人统计】证据；"
-            "列举论文或合作者时必须用有序序号 1. 2. 3.，每条一行，禁止「姓名」下挂「- 所属机构」；"
+            "列举论文或合作者时必须用有序序号 1. 2. 3.，每条一行；"
             "合作者格式：`1. **姓名**（N篇）：机构A / 机构B`；"
             "论文须全部列出；DOI 纯文本；链接用 [查看全文](url)；禁止 HTML。"
         )
+    if task in {"topic_evolution", "keyword_collab", "journal_overview", "yearly_growth"}:
+        return (
+            f"本题任务={task}。{insight}"
+            "凡必须点名的名单用有序序号；不要写参考文献；DOI 用纯文本。"
+        )
     if only_struct:
         return (
-            "本题为结构化分析（SQL/KG）。请直接回答结论与分布；"
+            f"本题为结构化分析（SQL/KG）。{insight}"
             "凡名单/分布必须用有序序号 1. 2. 3.，每条一行；"
             "不要写参考文献；DOI 用纯文本。"
         )
     if has_rag and len(intents) == 1:
         return (
-            "本题为文献内容问答。请基于 [RAG] 证据作答；"
+            "本题为文献内容问答。请基于 [RAG] 证据作答并提炼观点；"
             "文末可列相关论文（题名、DOI 纯文本、证据中的链接），不要空的参考文献，不要 HTML。"
+            "DOI/年份必须落在证据约束清单内。"
         )
     return (
-        "本题可能同时涉及结构证据与文献。优先用 SQL/KG 回答关系/统计部分；"
-        "仅当证据中确有相关论文时再附 DOI/链接；DOI 用纯文本；不要 HTML。"
+        f"本题可能同时涉及结构证据与文献。{insight}"
+        "优先用 SQL/KG 回答关系/统计部分；仅当证据中确有相关论文时再附 DOI/链接；"
+        "DOI 用纯文本；不要 HTML。"
     )
+
+
+def _fix_heading_bold(text: str) -> str:
+    """Strip broken/redundant ** inside ATX headings (#{1,6})."""
+
+    def _repl(m: re.Match) -> str:
+        hashes, body = m.group(1), m.group(2).strip()
+        # ### **title** / ### **title  → ### title
+        if body.startswith("**") and body.endswith("**") and len(body) > 4:
+            inner = body[2:-2].strip()
+            if "**" not in inner:
+                body = inner
+        elif body.startswith("**"):
+            body = body[2:].lstrip()
+        elif body.endswith("**") and body.count("**") == 1:
+            body = body[:-2].rstrip()
+        # odd number of ** left → drop all markers on this heading line
+        if body.count("**") % 2 == 1:
+            body = body.replace("**", "")
+        return f"{hashes}{body}"
+
+    return re.sub(r"(?m)^(#{1,6}\s+)(.+)$", _repl, text)
 
 
 def _fix_markdown_bold_glitches(text: str) -> str:
     """Repair common model bold mistakes like `**title**（2025）**`."""
+    text = _fix_heading_bold(text)
     # **title**（2025）** → **title**（2025）
     text = re.sub(
         r"(\*\*[^*]+?\*\*)\s*([（(]\s*\d{4}\s*年?\s*[)）])\s*\*\*",
@@ -73,8 +115,14 @@ def _fix_markdown_bold_glitches(text: str) -> str:
         text,
         flags=re.I | re.M,
     )
+    # heading line starts with ** but never closes: **标题
+    text = re.sub(r"(?m)^\*\*(?=[^*].*$)(?!.*\*\*)", "", text)
+    # trailing orphan ** after sentence / 查看全文
+    text = re.sub(r"\*\*(?=\s*(?:查看全文|DOI|$))", "", text, flags=re.M)
     # dangling ** at end of line
     text = re.sub(r"\*\*(?=\s*$)", "", text, flags=re.M)
+    # collapse leftover lone ** pairs used as fake headings
+    text = re.sub(r"(?m)^\*\*\s*$", "", text)
     return text
 
 
@@ -130,9 +178,13 @@ def _ensure_ordered_list_markdown(text: str) -> str:
         bare_run = []
 
     for line in lines:
-        if re.match(r"^#{1,4}\s+", line) or re.match(
-            r"^(主要合作者|合作者机构|机构分布|全部发文|相关论文|关键词含)",
-            line.strip(),
+        if (
+            re.match(r"^#{1,4}\s+", line)
+            or re.match(
+                r"^(主要合作者|合作者机构|机构分布|全部发文|相关论文|关键词含)",
+                line.strip(),
+            )
+            or re.match(r"^\*\*[^*]+\*\*", line.strip())  # period / section bold titles
         ):
             flush_bare(force_keep=True)
             expecting = 1
@@ -166,6 +218,159 @@ def _ensure_ordered_list_markdown(text: str) -> str:
 
     flush_bare()
     return "\n".join(out).strip()
+
+
+def _kw_names(period: Dict[str, Any], n: int = 5) -> List[str]:
+    return [str(r.get("keyword")) for r in (period.get("keywords") or [])[:n] if r.get("keyword")]
+
+
+def try_journal_overview_template_answer(state: JournalState) -> Optional[str]:
+    plan = state.get("query_plan") or {}
+    sql = state.get("sql_evidence") or {}
+    if sql.get("scope") != "journal_overview":
+        return None
+    # Only template when plan/task explicitly asks for overview (ReAct or router).
+    task = plan.get("task") or sql.get("task")
+    if task and task != "journal_overview":
+        return None
+    if task != "journal_overview":
+        return None
+    y0, y1 = sql.get("start_year"), sql.get("end_year")
+    periods = sql.get("periods") or []
+    authors = sql.get("authors") or []
+    institutions = sql.get("institutions") or []
+    keywords = sql.get("keywords") or []
+
+    lines = [
+        f"## 期刊学术发展概览（{y0}–{y1}）",
+        "",
+        "### 1. 总览判断",
+        "",
+    ]
+    if len(periods) >= 2:
+        first, last = periods[0], periods[-1]
+        early = set(_kw_names(first, 8))
+        rising = [k for k in _kw_names(last, 8) if k not in early]
+        stable = [k for k in _kw_names(last, 8) if k in early]
+        lines.append(
+            f"从 {first.get('period')} 到 {last.get('period')}，发文规模由约 "
+            f"**{first.get('paper_count')}** 篇变化至约 **{last.get('paper_count')}** 篇；"
+            "研究重心呈现「稳态主题 + 阶段性新热点」并存。"
+        )
+        if stable:
+            lines.append(f"贯穿始终的主轴包括：{'、'.join(stable)}。")
+        if rising:
+            lines.append(f"近期相对走强、值得跟踪的方向包括：{'、'.join(rising)}。")
+        if len(periods) >= 3:
+            mid = periods[1]
+            mid_only = [
+                k
+                for k in _kw_names(mid, 6)
+                if k not in early and k not in set(_kw_names(last, 8))
+            ]
+            if mid_only:
+                lines.append(
+                    f"{mid.get('period')} 一度较突出、其后回落或分化的主题："
+                    f"{'、'.join(mid_only)}。"
+                )
+    else:
+        lines.append("阶段划分不足，以下仅基于全区间结构化统计作简要研判。")
+    lines.append("")
+
+    lines.append("### 2. 阶段演进（证据摘要）")
+    lines.append("")
+    for p in periods:
+        kws = p.get("keywords") or []
+        top = "、".join(
+            f"{r.get('keyword')}（{r.get('paper_count')}篇）" for r in kws[:5]
+        ) or "（该阶段关键词不足）"
+        lines.append(
+            f"- **{p.get('period')}**（约 {p.get('paper_count')} 篇）：{top}"
+        )
+    lines.append("")
+
+    lines.append("### 3. 作者与机构格局")
+    lines.append("")
+    if authors:
+        top_a = "、".join(
+            f"**{a.get('name_zh')}**（{a.get('paper_count')}篇）" for a in authors[:5]
+        )
+        lines.append(f"发文较活跃的作者节点：{top_a}。")
+    if institutions:
+        top_i = "、".join(
+            f"**{i.get('institution')}**（{i.get('paper_count')}篇）"
+            for i in institutions[:5]
+        )
+        lines.append(f"贡献突出的机构节点：{top_i}。")
+    lines.append("")
+
+    lines.append("### 4. 全区间热词与前瞻")
+    lines.append("")
+    if keywords:
+        lines.append(
+            "全区间高频主题："
+            + "、".join(
+                f"{r.get('keyword')}（{r.get('paper_count')}篇）"
+                for r in keywords[:10]
+            )
+            + "。"
+        )
+    if periods:
+        last = periods[-1]
+        late_kws = _kw_names(last, 8)
+        buckets = [
+            (
+                "作物遗传与分子",
+                [
+                    k
+                    for k in late_kws
+                    if k
+                    in {
+                        "水稻",
+                        "基因表达",
+                        "表达分析",
+                        "转录组",
+                        "基因克隆",
+                        "原核表达",
+                        "克隆",
+                    }
+                ],
+            ),
+            (
+                "产量与品质",
+                [k for k in late_kws if k in {"产量", "品质", "生长", "生长性能"}],
+            ),
+            (
+                "环境与污染",
+                [k for k in late_kws if k in {"镉", "重金属", "土壤"}],
+            ),
+            (
+                "新兴交叉",
+                [k for k in late_kws if k in {"肠道菌群", "番茄", "香气"}],
+            ),
+        ]
+        foresight = [
+            f"**{title}**（{'、'.join(items)}）"
+            for title, items in buckets
+            if items
+        ]
+        if foresight:
+            lines.append(
+                f"结合 {last.get('period')} 热词，后续可关注："
+                + "；".join(foresight)
+                + "。"
+            )
+        elif late_kws:
+            lines.append(
+                f"结合 {last.get('period')} 高频词继续跟踪："
+                f"{'、'.join(late_kws)}。"
+            )
+    lines.append("")
+    lines.append(
+        "> 以上判断均来自本刊 SQLite 结构化统计（发文量 / 关键词 / 作者 / 机构）；"
+        "机构名已合并空格变体。"
+    )
+    return "\n".join(lines).strip()
 
 
 def try_keyword_authors_template_answer(state: JournalState) -> Optional[str]:
@@ -207,11 +412,47 @@ def try_keyword_authors_template_answer(state: JournalState) -> Optional[str]:
     return _ensure_ordered_list_markdown("\n".join(lines))
 
 
+def try_coauthored_papers_template_answer(state: JournalState) -> Optional[str]:
+    sql = state.get("sql_evidence") or {}
+    if sql.get("scope") != "coauthored_papers" and sql.get("task") != "coauthored_papers":
+        return None
+    a = sql.get("author_name_a") or (sql.get("author_a") or {}).get("name_zh") or "作者A"
+    b = sql.get("author_name_b") or (sql.get("author_b") or {}).get("name_zh") or "作者B"
+    papers = sql.get("papers") or []
+    total = sql.get("total_papers") if sql.get("total_papers") is not None else len(papers)
+    lines = [
+        f"## {a} 与 {b} 的合著发文（共 {total} 篇）",
+        "",
+    ]
+    if not papers:
+        lines.append("未检索到两人共同署名的论文。")
+        return "\n".join(lines)
+    for i, p in enumerate(papers, 1):
+        title = (p.get("title_zh") or p.get("title") or "（无题名）").strip()
+        year = p.get("year")
+        doi = (p.get("doi") or "").strip()
+        url = doi_url(doi) or ""
+        year_bit = f"（{year}）" if year else ""
+        bits = [f"{i}. **{title}**{year_bit}"]
+        if doi:
+            bits.append(f"DOI: {doi}")
+        if url:
+            bits.append(f"[查看全文]({url})")
+        lines.append(" ".join(bits))
+    return _ensure_ordered_list_markdown("\n".join(lines))
+
+
 def try_author_template_answer(state: JournalState) -> Optional[str]:
     """
     Format author papers / collaborators directly from SQL evidence.
     Avoids LLM truncation and broken ** markers on long lists.
     """
+    overview = try_journal_overview_template_answer(state)
+    if overview:
+        return overview
+    co_ans = try_coauthored_papers_template_answer(state)
+    if co_ans:
+        return co_ans
     kw_ans = try_keyword_authors_template_answer(state)
     if kw_ans:
         return kw_ans
@@ -224,6 +465,14 @@ def try_author_template_answer(state: JournalState) -> Optional[str]:
     if "rag" in intents and rag.get("hits"):
         return None
 
+    # Safety: pair coauthor questions must never render as single-author dump.
+    q = state.get("question") or ""
+    if re.search(
+        r"[一-龥]{2,4}\s*(?:和|与|跟)\s*[一-龥]{2,4}.*(?:合作|合著|共著)",
+        q,
+    ):
+        return None
+
     papers = sql.get("papers") or sql.get("recent_papers") or []
     collab = sql.get("collaborators") or {}
     inst = sql.get("collaborator_institutions") or {}
@@ -233,7 +482,6 @@ def try_author_template_answer(state: JournalState) -> Optional[str]:
 
     author = sql.get("author") or {}
     name = author.get("name_zh") or sql.get("author_name") or "该作者"
-    q = state.get("question") or ""
 
     ask_papers = bool(re.search(r"发文|论文|全部|著作|题名|DOI", q))
     ask_collab = bool(re.search(r"合作|机构|合著", q))
@@ -376,13 +624,21 @@ def build_generate_messages(state: JournalState) -> List[Dict[str, str]]:
     reason = state.get("route_reason") or ""
     evidence = state.get("evidence_text") or "（无证据）"
     history: List[Dict[str, str]] = state.get("history") or []
+    plan = state.get("query_plan") or {}
+    focus = plan.get("focus") or ""
+    task = plan.get("task") or ""
+    ledger = build_evidence_ledger(state)
 
     # intents/reason are for model grounding only — never ask it to echo them.
     user_prompt = (
         f"用户问题: {question}\n"
-        f"（内部参考，勿写入回答）证据通道: {intents}; {reason}\n\n"
-        f"以下是各 Agent 汇总证据:\n{evidence}\n\n"
-        f"{_build_instruction(intents, evidence)}\n"
+        f"（内部参考，勿写入回答）任务={task}; 证据通道: {intents}; {reason}\n"
+        f"{('任务焦点: ' + focus + chr(10)) if focus else ''}"
+        f"\n以下是各 Agent 汇总证据:\n{evidence}\n\n"
+        f"{ledger}\n\n"
+        f"{_build_instruction(intents, evidence, task)}\n"
+        "必须紧扣用户问题与任务焦点做综合推理与升维总结；"
+        "禁止答非所问、套用无关全刊概览，或把证据复述成数据报表。"
         "只输出面向用户的最终答案，不要输出路由、意图或修正说明。"
     )
     messages: List[Dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]
@@ -401,7 +657,7 @@ def _chunk_text(text: str, size: int = 48) -> Iterator[str]:
 def stream_generate(state: JournalState) -> Iterator[str]:
     templated = try_author_template_answer(state)
     if templated:
-        yield from _chunk_text(templated)
+        yield from _chunk_text(enforce_evidence_constraints(templated, state))
         return
     chat = MiniMaxChat(get_settings())
     yield from chat.chat_stream(
@@ -410,16 +666,23 @@ def stream_generate(state: JournalState) -> Iterator[str]:
     )
 
 
-def finalize_answer(raw: str, intents: List[str]) -> str:
-    return _cleanup_answer(raw or "", intents)
+def finalize_answer(
+    raw: str,
+    intents: List[str],
+    state: Optional[JournalState] = None,
+) -> str:
+    text = _cleanup_answer(raw or "", intents)
+    if state is not None:
+        text = enforce_evidence_constraints(text, state)
+    return text
 
 
 def generate_node(state: JournalState) -> Dict[str, Any]:
     intents = state.get("intents") or []
     templated = try_author_template_answer(state)
     if templated:
-        return {"answer": templated}
+        return {"answer": finalize_answer(templated, intents, state)}
     chat = MiniMaxChat(get_settings())
     answer = chat.chat(build_generate_messages(state), max_tokens=8192)
-    answer = finalize_answer(answer, intents)
+    answer = finalize_answer(answer, intents, state)
     return {"answer": answer}

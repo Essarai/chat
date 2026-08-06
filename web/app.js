@@ -21,7 +21,10 @@
   const PRESETS = [
     { q: "徐建明全部发文", label: "徐建明全部发文" },
     { q: "徐建明合作的作者所属机构情况", label: "徐建明合作的作者所属机构情况" },
-    { q: "近十年研究趋势", label: "近十年研究趋势" },
+    {
+      q: "请分析该期刊过去20年的学术发展历程，识别主要研究方向的演变趋势，找出各阶段的核心作者和代表性研究机构，并总结未来值得关注的研究方向。",
+      label: "过去20年学术发展历程与研究方向演变",
+    },
   ];
 
   const COLORS = {
@@ -102,6 +105,25 @@
       /([）)])\s*\*\*(?=\s*(?:DOI|\[查看全文]|查看全文|$))/gim,
       "$1"
     );
+    // ATX headings: ### **title / ### **title** → ### title
+    t = t.replace(/^(#{1,6}\s+)(.+)$/gm, (_, hashes, body) => {
+      let b = String(body || "").trim();
+      if (b.startsWith("**") && b.endsWith("**") && b.length > 4) {
+        const inner = b.slice(2, -2).trim();
+        if (!inner.includes("**")) b = inner;
+      } else if (b.startsWith("**")) {
+        b = b.slice(2).trimStart();
+      } else if (b.endsWith("**") && (b.match(/\*\*/g) || []).length === 1) {
+        b = b.slice(0, -2).trimEnd();
+      }
+      if (((b.match(/\*\*/g) || []).length % 2) === 1) {
+        b = b.replace(/\*\*/g, "");
+      }
+      return hashes + b;
+    });
+    // opening ** without close on the same line
+    t = t.replace(/^\*\*(?=[^*].*$)(?!.*\*\*)/gm, "");
+    t = t.replace(/\*\*(?=\s*(?:查看全文|DOI|$))/gm, "");
     t = t.replace(/\*\*(?=\s*$)/gm, "");
 
     // <a href="url"...>label</a>

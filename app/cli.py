@@ -28,10 +28,10 @@ def run_repl(once: str | None = None) -> int:
     bot = ChatOrchestrator(settings)
     print(BANNER)
     try:
-        print(
-            f"已连接 Chroma/{settings.chroma_collection}  "
-            f"docs≈{bot.chroma.count()}"
-        )
+        from app.services.chroma_store import ChromaStore
+
+        count = ChromaStore(settings).count()
+        print(f"已连接 Chroma/{settings.chroma_collection}  docs≈{count}")
     except Exception as e:
         print(f"警告: Chroma 暂不可用: {e}")
 

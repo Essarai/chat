@@ -19,6 +19,166 @@ def _format_sql(data: Dict[str, Any]) -> str:
     funds = ", ".join(
         f"{r['agency_norm']}({r['paper_count']})" for r in (data.get("funds") or [])[:10]
     )
+    task = data.get("task") or data.get("scope")
+
+    if task == "yearly_growth" or data.get("yoy"):
+        y0, y1 = data.get("start_year"), data.get("end_year")
+        lines = [
+            f"[SQL]【逐年发文与增速】区间: {y0}-{y1}",
+            "逐年发文量（含同比）:",
+        ]
+        for r in data.get("yoy") or data.get("yearly") or []:
+            delta = r.get("delta")
+            pct = r.get("yoy_pct")
+            if delta is None:
+                lines.append(f"- {r.get('year')}: {r.get('paper_count')} 篇")
+            else:
+                pct_s = f"{pct}%" if pct is not None else "—"
+                lines.append(
+                    f"- {r.get('year')}: {r.get('paper_count')} 篇"
+                    f"（Δ{delta:+d}，同比 {pct_s}）"
+                )
+        fg = data.get("fastest_growth")
+        if fg:
+            lines.append(
+                f"预计算·增长最快年份: {fg.get('year')} "
+                f"（Δ{fg.get('delta'):+d}，同比 {fg.get('yoy_pct')}%）"
+            )
+        lines.append("回答须列出主要年份数量，并明确指出增长最快的年份。")
+        return "\n".join(lines)
+
+    if data.get("scope") == "topic_stats" or task == "topic_evolution":
+        y0, y1 = data.get("start_year"), data.get("end_year")
+        lines = [f"[SQL]【专题关键词统计】区间: {y0}-{y1}"]
+        topic = data.get("topic_keywords") or []
+        if not topic or all(int(r.get("paper_count") or 0) == 0 for r in topic):
+            lines.append(
+                "专题相关关键词在本刊几乎无命中（paper_count 均为 0 或缺失）。"
+                "回答必须如实说明该主题文献稀少，禁止用全刊热词（如水稻）冒充该主题。"
+            )
+        else:
+            lines.append(
+                "专题词频: "
+                + ", ".join(
+                    f"{r.get('keyword')}({r.get('paper_count')})" for r in topic[:15]
+                )
+            )
+            for term, series in (data.get("yearly_by_keyword") or {}).items():
+                if not series:
+                    continue
+                lines.append(
+                    f"{term} 逐年: "
+                    + ", ".join(f"{r['year']}:{r['paper_count']}" for r in series)
+                )
+        return "\n".join(lines)
+
+    if task == "keyword_collab" or data.get("scope") == "keyword_collab":
+        kw = data.get("keyword") or ""
+        lines = [
+            f"[SQL]【关键词合作网络】关键词「{kw}」",
+            f"相关论文总数: {data.get('total_papers')}；相关作者总数: {data.get('total_authors')}",
+            "高产作者:",
+        ]
+        for i, a in enumerate((data.get("authors") or [])[:12], 1):
+            name = a.get("name_zh") or a.get("name_en") or a.get("author_id")
+            lines.append(f"{i}. {name}（{a.get('paper_count')}篇）")
+        lines.append("主要机构:")
+        for i, inst in enumerate((data.get("institutions") or [])[:12], 1):
+            lines.append(
+                f"{i}. {inst.get('institution')}（{inst.get('paper_count')}篇）"
+            )
+        return "\n".join(lines)
+
+    if data.get("scope") == "top_directions" or task == "top_directions_with_papers":
+        y0, y1 = data.get("start_year"), data.get("end_year")
+        lines = [f"[SQL]【近区间热门研究方向】{y0}-{y1}"]
+        for i, d in enumerate((data.get("directions") or [])[:5], 1):
+            lines.append(
+                f"{i}. 方向「{d.get('keyword')}」（{d.get('paper_count')}篇）代表论文:"
+            )
+            for p in d.get("papers") or []:
+                doi = p.get("doi") or ""
+                url = doi_url(doi) or ""
+                year = p.get("year")
+                year_bit = f"（{year}）" if year else ""
+                link = f" [查看全文]({url})" if url else ""
+                doi_bit = f" DOI: {doi}" if doi else ""
+                lines.append(
+                    f"   - {p.get('title_zh')}{year_bit}{doi_bit}{link}"
+                )
+        return "\n".join(lines)
+
+    if task == "top_teams" or data.get("scope") == "top_teams":
+        y0, y1 = data.get("start_year"), data.get("end_year")
+        lines = [
+            f"[SQL]【高影响力团队线索】区间: {y0}-{y1}",
+            "高产作者: "
+            + ", ".join(
+                f"{r.get('name_zh')}({r.get('paper_count')})"
+                for r in (data.get("authors") or [])[:12]
+            ),
+            "主要机构: "
+            + ", ".join(
+                f"{r.get('institution')}({r.get('paper_count')})"
+                for r in (data.get("institutions") or [])[:12]
+            ),
+        ]
+        for a in data.get("author_keywords") or []:
+            ak = ", ".join(
+                f"{r.get('keyword')}({r.get('paper_count')})"
+                for r in (a.get("keywords") or [])[:6]
+            )
+            lines.append(
+                f"作者 {a.get('name_zh')}（{a.get('paper_count')}篇）关键词: {ak or '无'}"
+            )
+        for p in data.get("periods") or []:
+            pk = ", ".join(
+                f"{r.get('keyword')}({r.get('paper_count')})"
+                for r in (p.get("keywords") or [])[:8]
+            )
+            lines.append(
+                f"阶段 {p.get('period')}（约 {p.get('paper_count')} 篇）热词: {pk or '无'}"
+            )
+        lines.append("请据此识别主要研究团队，并归纳方向变化；勿编造未出现的团队名。")
+        return "\n".join(lines)
+
+    if data.get("scope") == "journal_overview":
+        y0, y1 = data.get("start_year"), data.get("end_year")
+        lines = [
+            f"[SQL]【全刊发展概览】区间: {y0}-{y1}",
+            "按年发文量: "
+            + ", ".join(
+                f"{r['year']}:{r['paper_count']}" for r in (data.get("yearly") or [])[:25]
+            ),
+            "全区间热门关键词: "
+            + ", ".join(
+                f"{r['keyword']}({r['paper_count']})"
+                for r in (data.get("keywords") or [])[:15]
+            ),
+            "核心作者(按发文量): "
+            + ", ".join(
+                f"{r['name_zh']}({r['paper_count']})"
+                for r in (data.get("authors") or [])[:12]
+            ),
+            "代表性机构(按论文数): "
+            + ", ".join(
+                f"{r['institution']}({r['paper_count']})"
+                for r in (data.get("institutions") or [])[:12]
+            ),
+        ]
+        for p in data.get("periods") or []:
+            kws = ", ".join(
+                f"{r['keyword']}({r['paper_count']})"
+                for r in (p.get("keywords") or [])[:8]
+            )
+            lines.append(
+                f"阶段 {p.get('period')}（发文约 {p.get('paper_count')} 篇）热词: {kws or '无'}"
+            )
+        lines.append(
+            "回答要求：严格基于以上统计归纳演变趋势、核心作者与机构；"
+            "不要编造未出现的论文题名；可用有序列表；不要输出裸的 ** 标记。"
+        )
+        return "\n".join(lines)
 
     if data.get("scope") == "keyword_authors":
         kw = data.get("keyword") or ""
@@ -46,6 +206,26 @@ def _format_sql(data: Dict[str, Any]) -> str:
                 lines.append(
                     f"   - {p.get('title_zh')}{year_bit}{doi_bit}{link}"
                 )
+        return "\n".join(lines)
+
+    if data.get("scope") == "coauthored_papers" or data.get("task") == "coauthored_papers":
+        a = data.get("author_name_a") or (data.get("author_a") or {}).get("name_zh")
+        b = data.get("author_name_b") or (data.get("author_b") or {}).get("name_zh")
+        papers = data.get("papers") or []
+        lines = [
+            f"[SQL]【合著论文】{a} × {b}（共 {data.get('total_papers', len(papers))} 篇）",
+            "只回答两人共同署名论文；禁止输出各自全部发文或全部合作者名单。",
+        ]
+        for i, p in enumerate(papers, 1):
+            doi = p.get("doi") or ""
+            url = doi_url(doi) or ""
+            year = p.get("year")
+            year_bit = f"（{year}）" if year else ""
+            link = f" [查看全文]({url})" if url else ""
+            doi_bit = f" DOI: {doi}" if doi else ""
+            lines.append(f"{i}. {p.get('title_zh')}{year_bit}{doi_bit}{link}")
+        if not papers:
+            lines.append("（无合著论文）")
         return "\n".join(lines)
 
     if data.get("scope") == "author":
@@ -148,6 +328,50 @@ def _format_kg(data: Dict[str, Any]) -> str:
                 f"- {p.get('year')} {p.get('title')} ({p.get('doi')}) {url or ''}".rstrip()
             )
         return "\n".join(lines)
+    # keyword ego / network summary
+    if data.get("query_keyword") or data.get("focus") == "keyword" or data.get("keyword"):
+        kw = data.get("query_keyword") or (data.get("keyword") or {}).get("label") or ""
+        nb = data.get("neighborhood") or {}
+        lines = [
+            f"[KG]【关键词邻域】「{kw}」（来源={data.get('source')}；"
+            f"作者{nb.get('author_count', len(data.get('authors') or []))}、"
+            f"机构{nb.get('institution_count', len(data.get('institutions') or []))}、"
+            f"边{nb.get('edge_count', len(data.get('edges') or []))}）"
+        ]
+        authors = data.get("neighborhood_authors") or data.get("authors") or []
+        if authors and isinstance(authors, list) and isinstance(authors[0], dict):
+            lines.append("邻域作者（按相关发文）:")
+            for a in authors[:12]:
+                lines.append(
+                    f"- {a.get('name_zh') or a.get('name')}（{a.get('paper_count')}篇）"
+                )
+        insts = data.get("neighborhood_institutions") or data.get("institutions") or []
+        if insts and isinstance(insts, list) and isinstance(insts[0], dict):
+            lines.append("邻域机构:")
+            for i in insts[:12]:
+                lines.append(
+                    f"- {i.get('institution') or i.get('name')}（{i.get('paper_count')}篇）"
+                )
+        related = data.get("related_keywords") or []
+        if related:
+            lines.append(
+                "共现关键词: "
+                + ", ".join(
+                    f"{r.get('label') or r.get('keyword')}({r.get('paper_count')})"
+                    for r in related[:10]
+                    if isinstance(r, dict)
+                )
+            )
+        if data.get("collaborators"):
+            lines.append("核心作者合作者（author ego）:")
+            for c in (data.get("collaborators") or [])[:10]:
+                lines.append(
+                    f"- {c.get('name_zh')}（合著{c.get('co_papers')}篇）"
+                )
+        if data.get("neo4j_error"):
+            lines.append(f"(Neo4j 回退: {data.get('neo4j_error')})")
+        if len(lines) > 1:
+            return "\n".join(lines)
     return "[KG] 未检索到图谱信息。"
 
 
@@ -172,16 +396,40 @@ def _format_rag(data: Dict[str, Any]) -> str:
 
 def merge_node(state: JournalState) -> Dict[str, Any]:
     intents = state.get("intents") or []
+    plan = state.get("query_plan") or {}
     parts: List[str] = []
     citations: List[Dict[str, Any]] = []
     seen_doi = set()
 
-    if "sql" in intents:
-        parts.append(_format_sql(state.get("sql_evidence") or {}))
-    if "kg" in intents:
-        parts.append(_format_kg(state.get("kg_evidence") or {}))
-    if "rag" in intents:
-        rag = state.get("rag_evidence") or {}
+    focus = plan.get("focus") or state.get("goal") or ""
+    if focus:
+        parts.append(f"[任务焦点] {focus}")
+
+    route = state.get("route") or {}
+    if route:
+        parts.append(
+            f"[路由] complexity={route.get('complexity')} "
+            f"source={route.get('suggested_source')} escalated={route.get('escalated')}"
+        )
+
+    bundle = state.get("evidence_bundle") or []
+    if bundle:
+        parts.append("[检索步骤摘要]")
+        for b in bundle:
+            parts.append(
+                f"- step{b.get('step')}: {b.get('source')}/{b.get('operation')} — "
+                f"{(b.get('summary') or '')[:400]}"
+            )
+
+    # Include any source that has evidence (ReAct may fill without intents yet)
+    sql = state.get("sql_evidence") or {}
+    kg = state.get("kg_evidence") or {}
+    rag = state.get("rag_evidence") or {}
+    if "sql" in intents or sql:
+        parts.append(_format_sql(sql))
+    if "kg" in intents or kg:
+        parts.append(_format_kg(kg))
+    if "rag" in intents or rag:
         parts.append(_format_rag(rag))
         for c in rag.get("citations") or []:
             doi = c.get("doi")
@@ -189,6 +437,5 @@ def merge_node(state: JournalState) -> Dict[str, Any]:
                 seen_doi.add(doi)
                 citations.append(c)
 
-    # if kg empty and rag not selected, keep citations empty
     evidence_text = "\n\n".join(p for p in parts if p)
     return {"evidence_text": evidence_text, "citations": citations}

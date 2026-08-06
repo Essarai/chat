@@ -7,6 +7,16 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+*.log
+.cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local acceptance-run outputs (keep Q.md as the question list)
+Q_results.md
+*_results.md
 
 # Keep the SQLite DB for Railway deploy; ignore WAL/SHM sidecars
 data/*.db-shm
