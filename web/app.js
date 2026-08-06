@@ -22,8 +22,8 @@
     { q: "徐建明全部发文", label: "徐建明全部发文" },
     { q: "徐建明合作的作者所属机构情况", label: "徐建明合作的作者所属机构情况" },
     {
-      q: "请分析该期刊过去20年的学术发展历程，识别主要研究方向的演变趋势，找出各阶段的核心作者和代表性研究机构，并总结未来值得关注的研究方向。",
-      label: "过去20年学术发展历程与研究方向演变",
+      q: "徐建明和施加春合作的发文有哪些",
+      label: "徐建明和施加春合作的发文有哪些",
     },
   ];
 
@@ -89,6 +89,62 @@
       .replace(/^["'<]+/, "")
       .replace(/["'>\s]+$/g, "")
       .replace(/[.,;:!?，。；！？]+$/g, "");
+  }
+
+  /** Ensure every ** on a line is paired; auto-close or drop orphans. */
+  function balanceBoldLine(line) {
+    if (!line.includes("**")) return line;
+    const parks = [];
+    let work = line.replace(/`[^`\n]+`/g, (m) => {
+      parks.push(m);
+      return `\0${parks.length - 1}\0`;
+    });
+    const markers = [];
+    for (let i = 0; i < work.length - 1; i++) {
+      if (work[i] === "*" && work[i + 1] === "*") {
+        markers.push(i);
+        i += 1;
+      }
+    }
+    const n = markers.length;
+    if (n === 0 || n % 2 === 0) {
+      // ok
+    } else if (n === 1) {
+      const at = markers[0];
+      const before = work.slice(0, at);
+      const after = work.slice(at + 2);
+      if (/^#{1,6}\s+/.test(before) || !after.trim()) {
+        work = before + after;
+      } else {
+        const core = after.replace(/\s+$/, "");
+        const trail = after.slice(core.length);
+        work = `${before}**${core}**${trail}`;
+      }
+    } else {
+      const last = markers[markers.length - 1];
+      work = work.slice(0, last) + work.slice(last + 2);
+      while (((work.match(/\*\*/g) || []).length % 2) === 1) {
+        const i = work.lastIndexOf("**");
+        if (i < 0) break;
+        work = work.slice(0, i) + work.slice(i + 2);
+      }
+    }
+    return work.replace(/\0(\d+)\0/g, (_, i) => parks[Number(i)] || "");
+  }
+
+  function ensureBoldClosed(text) {
+    if (!text || !text.includes("**")) return text;
+    const lines = String(text).split("\n");
+    let inFence = false;
+    return lines
+      .map((line) => {
+        if (line.trim().startsWith("```")) {
+          inFence = !inFence;
+          return line;
+        }
+        return inFence ? line : balanceBoldLine(line);
+      })
+      .join("\n");
   }
 
   /** Repair model HTML / mangled anchors before Markdown render. */
@@ -161,7 +217,8 @@
 
     // Force ordered list for paper / collaborator entry blocks
     t = numberEntryBlocks(t);
-    return t;
+    // Hard guarantee before HTML render: every ** is paired
+    return ensureBoldClosed(t);
   }
 
   function isEntryMetaLine(s) {
@@ -343,6 +400,8 @@
     t = t.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>");
     t = t.replace(/(^|[^_])_([^_\n]+)_(?!_)/g, "$1<em>$2</em>");
     t = t.replace(/~~([^~]+)~~/g, "<del>$1</del>");
+    // Never leave raw ** in HTML (unpaired leftovers)
+    t = t.replace(/\*\*/g, "");
 
     t = t.replace(/\uE000(\d+)\uE001/g, (_, i) => slots[Number(i)] || "");
     return t;

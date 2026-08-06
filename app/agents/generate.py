@@ -99,6 +99,75 @@ def _fix_heading_bold(text: str) -> str:
     return re.sub(r"(?m)^(#{1,6}\s+)(.+)$", _repl, text)
 
 
+def _balance_bold_line(line: str) -> str:
+    """
+    Ensure ** markers on one line are even.
+    - headings / empty after opener → strip orphan
+    - single opener with content → auto-close
+    - other odd counts → drop the last orphan **
+    """
+    if "**" not in line:
+        return line
+    # Leave inline code alone: temporarily park `...`
+    parks: List[str] = []
+
+    def _park(m: re.Match) -> str:
+        parks.append(m.group(0))
+        return f"\x00{len(parks) - 1}\x00"
+
+    work = re.sub(r"`[^`\n]+`", _park, line)
+    markers = list(re.finditer(r"\*\*", work))
+    n = len(markers)
+    if n == 0:
+        out = work
+    elif n % 2 == 0:
+        out = work
+    elif n == 1:
+        m = markers[0]
+        before, after = work[: m.start()], work[m.end() :]
+        if re.match(r"^#{1,6}\s+", before) or not after.strip():
+            out = before + after
+        else:
+            core = after.rstrip()
+            trail = after[len(core) :]
+            out = f"{before}**{core}**{trail}"
+    else:
+        # Drop trailing orphan (usually an extra closer or unclosed opener).
+        last = markers[-1]
+        out = work[: last.start()] + work[last.end() :]
+        # If still odd (shouldn't), keep stripping.
+        while out.count("**") % 2 == 1:
+            i = out.rfind("**")
+            if i < 0:
+                break
+            out = out[:i] + out[i + 2 :]
+
+    def _unpark(m: re.Match) -> str:
+        return parks[int(m.group(1))]
+
+    return re.sub(r"\x00(\d+)\x00", _unpark, out)
+
+
+def ensure_bold_closed(text: str) -> str:
+    """Final gate: every ** is paired (line-scoped; journal answers rarely span lines)."""
+    if not text or "**" not in text:
+        return text
+    lines = text.split("\n")
+    # Skip fenced code blocks
+    out: List[str] = []
+    in_fence = False
+    for line in lines:
+        if line.strip().startswith("```"):
+            in_fence = not in_fence
+            out.append(line)
+            continue
+        if in_fence:
+            out.append(line)
+        else:
+            out.append(_balance_bold_line(line))
+    return "\n".join(out)
+
+
 def _fix_markdown_bold_glitches(text: str) -> str:
     """Repair common model bold mistakes like `**title**（2025）**`."""
     text = _fix_heading_bold(text)
@@ -123,7 +192,8 @@ def _fix_markdown_bold_glitches(text: str) -> str:
     text = re.sub(r"\*\*(?=\s*$)", "", text, flags=re.M)
     # collapse leftover lone ** pairs used as fake headings
     text = re.sub(r"(?m)^\*\*\s*$", "", text)
-    return text
+    # Hard guarantee: pair or drop remaining orphans
+    return ensure_bold_closed(text)
 
 
 def _org_text(orgs: Any) -> str:
@@ -614,7 +684,8 @@ def _cleanup_answer(text: str, intents: List[str]) -> str:
             "",
             text,
         )
-    return re.sub(r"\n{3,}", "\n\n", text).strip()
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    return ensure_bold_closed(text)
 
 
 def build_generate_messages(state: JournalState) -> List[Dict[str, str]]:
