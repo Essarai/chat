@@ -15,6 +15,14 @@
   let needsReset = false;
   let trendsLoaded = false;
   let graphAnim = null;
+  let graphNetwork = null;
+  let graphNodesDS = null;
+  let graphEdgesDS = null;
+  let graphHubId = null;
+  let graphLoadSeq = 0;
+  let graphLoading = false;
+  const graphCache = new Map();
+  const GRAPH_CACHE_MAX = 24;
   let selectedYear = null;
   let yearlyRowsCache = [];
 
@@ -26,12 +34,22 @@
 
   const COLORS = {
     author: "#1a73e8",
-    collaborator: "#4285f4",
+    collaborator: "#5b9cf5",
     paper: "#e37400",
     keyword: "#188038",
-    institution: "#9334e6",
+    institution: "#7c3aed",
     fund: "#d93025",
     clc: "#5f6368",
+  };
+
+  const GRAPH_SHAPES = {
+    author: "dot",
+    collaborator: "dot",
+    paper: "box",
+    keyword: "diamond",
+    institution: "triangle",
+    fund: "star",
+    clc: "square",
   };
 
   const GROUP_LABELS = {
@@ -947,446 +965,205 @@
       cancelAnimationFrame(graphAnim);
       graphAnim = null;
     }
-  }
-
-  function renderGraph(data) {
-    stopGraph();
-    const width = Math.max(graphCanvas.clientWidth || 800, 320);
-    const height = Math.max(graphCanvas.clientHeight || 520, 360);
-    const rawNodes = data.nodes || [];
-    const rawEdges = data.edges || [];
-    if (!rawNodes.length) {
-      graphCanvas.innerHTML = "";
-      if (graphLegend) graphLegend.innerHTML = "";
-      graphStatus.textContent = "无节点";
-      return;
-    }
-
-    const nodes = rawNodes.map((n, i) => {
-      const angle = (i / Math.max(rawNodes.length, 1)) * Math.PI * 2;
-      const baseR = 10 + Math.min(Number(n.value) || 1, 20) * 0.7;
-      return {
-        id: n.id,
-        label: n.label || n.id,
-        tip: n.title || n.label || n.id,
-        group: n.group || "author",
-        value: Number(n.value) || 1,
-        baseR,
-        x: width / 2 + Math.cos(angle) * Math.min(width, height) * 0.28,
-        y: height / 2 + Math.sin(angle) * Math.min(width, height) * 0.28,
-        vx: 0,
-        vy: 0,
-        fx: null,
-        fy: null,
-        visible: true,
-      };
-    });
-    let hub = nodes[0];
-    hub.x = width / 2;
-    hub.y = height / 2;
-    hub.fx = width / 2;
-    hub.fy = height / 2;
-
-    const byId = Object.fromEntries(nodes.map((n) => [n.id, n]));
-    const links = rawEdges
-      .map((e) => ({
-        source: byId[e.from],
-        target: byId[e.to],
-        value: Number(e.value) || 1,
-      }))
-      .filter((e) => e.source && e.target);
-
-    const presentGroups = [];
-    const seenG = new Set();
-    for (const n of nodes) {
-      if (!seenG.has(n.group)) {
-        seenG.add(n.group);
-        presentGroups.push(n.group);
-      }
-    }
-    const enabledGroups = new Set(presentGroups);
-
-    const svgNS = "http://www.w3.org/2000/svg";
-    const svg = document.createElementNS(svgNS, "svg");
-    svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
-    svg.setAttribute("width", "100%");
-    svg.setAttribute("height", "100%");
-    svg.style.touchAction = "none";
-    svg.style.cursor = "grab";
-
-    const bg = document.createElementNS(svgNS, "rect");
-    bg.setAttribute("x", "0");
-    bg.setAttribute("y", "0");
-    bg.setAttribute("width", String(width));
-    bg.setAttribute("height", String(height));
-    bg.setAttribute("fill", "transparent");
-    svg.appendChild(bg);
-
-    const world = document.createElementNS(svgNS, "g");
-    const linkG = document.createElementNS(svgNS, "g");
-    const nodeG = document.createElementNS(svgNS, "g");
-    world.appendChild(linkG);
-    world.appendChild(nodeG);
-    svg.appendChild(world);
-    graphCanvas.innerHTML = "";
-    graphCanvas.appendChild(svg);
-
-    // Zoom/pan via world transform → node radius & text scale together
-    const view = { x: 0, y: 0, k: 1 };
-    let dragging = null;
-    let dragMoved = false;
-    let dragStart = null;
-    let panning = null;
-    let alpha = 1;
-
-    const linkEls = links.map((l) => {
-      const line = document.createElementNS(svgNS, "line");
-      line.setAttribute("class", "link");
-      line.setAttribute("stroke-width", String(1.2 + Math.min(l.value, 6) * 0.45));
-      linkG.appendChild(line);
-      return line;
-    });
-
-    function clientToWorld(clientX, clientY) {
-      const rect = svg.getBoundingClientRect();
-      const sx = ((clientX - rect.left) * width) / rect.width;
-      const sy = ((clientY - rect.top) * height) / rect.height;
-      return { x: (sx - view.x) / view.k, y: (sy - view.y) / view.k };
-    }
-
-    function syncNodeVisual(n, el) {
-      const r = n.baseR;
-      el.hit.setAttribute("r", String(Math.max(r + 10, 20)));
-      el.dot.setAttribute("r", String(r));
-      // font size tied to node radius → stays proportional under zoom
-      const fs = Math.max(10, Math.min(16, r * 0.95));
-      el.label.setAttribute("font-size", String(fs));
-      el.label.setAttribute("dy", String(r + fs * 0.95));
-      el.g.classList.toggle("is-hub", hub && hub.id === n.id);
-      el.g.classList.toggle("is-dim", !n.visible);
-    }
-
-    function applyFilter() {
-      nodes.forEach((n) => {
-        n.visible = enabledGroups.has(n.group);
-      });
-      links.forEach((l, i) => {
-        const on = l.source.visible && l.target.visible;
-        linkEls[i].classList.toggle("is-dim", !on);
-      });
-      nodes.forEach((n, i) => syncNodeVisual(n, nodeEls[i]));
-      paint();
-    }
-
-    function paint() {
-      world.setAttribute(
-        "transform",
-        `translate(${view.x},${view.y}) scale(${view.k})`
-      );
-      links.forEach((l, i) => {
-        linkEls[i].setAttribute("x1", l.source.x);
-        linkEls[i].setAttribute("y1", l.source.y);
-        linkEls[i].setAttribute("x2", l.target.x);
-        linkEls[i].setAttribute("y2", l.target.y);
-      });
-      nodes.forEach((n, i) => {
-        nodeEls[i].g.setAttribute("transform", `translate(${n.x},${n.y})`);
-      });
-    }
-
-    function ensureTick() {
-      if (!graphAnim) graphAnim = requestAnimationFrame(tick);
-    }
-
-    function centerOn(n) {
-      if (!n.visible) return;
-      nodes.forEach((o) => {
-        o.fx = null;
-        o.fy = null;
-      });
-      hub = n;
-      n.x = width / 2;
-      n.y = height / 2;
-      n.fx = width / 2;
-      n.fy = height / 2;
-      n.vx = 0;
-      n.vy = 0;
-      // keep hub visually centered at current zoom
-      view.x = width / 2 - n.x * view.k;
-      view.y = height / 2 - n.y * view.k;
-      alpha = 1;
-      nodes.forEach((node, i) => syncNodeVisual(node, nodeEls[i]));
-      paint();
-      ensureTick();
-      graphStatus.textContent = `中心：${n.label}　·　点击节点切换中心 / 图例筛选 / 滚轮缩放`;
-    }
-
-    function buildLegend() {
-      if (!graphLegend) return;
-      graphLegend.innerHTML = "";
-      const title = document.createElement("div");
-      title.className = "legend-title";
-      title.textContent = "类型筛选";
-      graphLegend.appendChild(title);
-      presentGroups.forEach((g) => {
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.dataset.group = g;
-        const sw = document.createElement("span");
-        sw.className = "swatch";
-        sw.style.background = COLORS[g] || "#888";
-        const lab = document.createElement("span");
-        lab.textContent = GROUP_LABELS[g] || g;
-        btn.appendChild(sw);
-        btn.appendChild(lab);
-        btn.addEventListener("click", () => {
-          if (enabledGroups.has(g)) {
-            if (enabledGroups.size <= 1) return; // keep at least one
-            enabledGroups.delete(g);
-            btn.classList.add("is-off");
-          } else {
-            enabledGroups.add(g);
-            btn.classList.remove("is-off");
-          }
-          // if hub filtered out, pick first visible
-          if (hub && !enabledGroups.has(hub.group)) {
-            const next = nodes.find((n) => enabledGroups.has(n.group));
-            if (next) centerOn(next);
-          }
-          applyFilter();
-        });
-        graphLegend.appendChild(btn);
-      });
-    }
-
-    const nodeEls = nodes.map((n) => {
-      const g = document.createElementNS(svgNS, "g");
-      g.setAttribute("class", "node");
-      g.style.cursor = "pointer";
-
-      const hit = document.createElementNS(svgNS, "circle");
-      hit.setAttribute("fill", "transparent");
-
-      const dot = document.createElementNS(svgNS, "circle");
-      dot.setAttribute("class", "dot");
-      dot.setAttribute("fill", COLORS[n.group] || COLORS.author);
-      dot.style.pointerEvents = "none";
-
-      const label = document.createElementNS(svgNS, "text");
-      label.setAttribute("text-anchor", "middle");
-      label.textContent = n.label.length > 8 ? n.label.slice(0, 7) + "…" : n.label;
-      label.style.pointerEvents = "none";
-
-      const title = document.createElementNS(svgNS, "title");
-      title.textContent = `${GROUP_LABELS[n.group] || n.group} · ${n.tip}`;
-
-      g.appendChild(title);
-      g.appendChild(hit);
-      g.appendChild(dot);
-      g.appendChild(label);
-      nodeG.appendChild(g);
-
-      const el = { g, hit, dot, label };
-      syncNodeVisual(n, el);
-
-      g.addEventListener("pointerdown", (ev) => {
-        if (!n.visible) return;
-        ev.stopPropagation();
-        ev.preventDefault();
-        dragging = n;
-        dragMoved = false;
-        dragStart = { x: ev.clientX, y: ev.clientY };
-        g.setPointerCapture(ev.pointerId);
-        g.style.cursor = "grabbing";
-        svg.style.cursor = "grabbing";
-        const p = clientToWorld(ev.clientX, ev.clientY);
-        n.fx = p.x;
-        n.fy = p.y;
-        n.x = p.x;
-        n.y = p.y;
-        alpha = Math.max(alpha, 0.25);
-        paint();
-        ensureTick();
-      });
-      g.addEventListener("pointermove", (ev) => {
-        if (dragging !== n) return;
-        ev.preventDefault();
-        if (
-          dragStart &&
-          (Math.abs(ev.clientX - dragStart.x) > 4 ||
-            Math.abs(ev.clientY - dragStart.y) > 4)
-        ) {
-          dragMoved = true;
-        }
-        const p = clientToWorld(ev.clientX, ev.clientY);
-        n.fx = p.x;
-        n.fy = p.y;
-        n.x = p.x;
-        n.y = p.y;
-        alpha = Math.max(alpha, 0.12);
-        paint();
-        ensureTick();
-      });
-      const endDrag = (ev) => {
-        if (dragging !== n) return;
-        const wasClick = !dragMoved;
-        dragging = null;
-        g.style.cursor = "pointer";
-        svg.style.cursor = "grab";
-        try {
-          g.releasePointerCapture(ev.pointerId);
-        } catch (_) {
-          /* ignore */
-        }
-        if (wasClick) {
-          centerOn(n);
-        } else if (hub && hub.id === n.id) {
-          n.fx = width / 2;
-          n.fy = height / 2;
-        } else {
-          setTimeout(() => {
-            if (dragging !== n && (!hub || hub.id !== n.id)) {
-              n.fx = null;
-              n.fy = null;
-            }
-          }, 60);
-        }
-      };
-      g.addEventListener("pointerup", endDrag);
-      g.addEventListener("pointercancel", endDrag);
-      return el;
-    });
-
-    bg.addEventListener("pointerdown", (ev) => {
-      if (dragging) return;
-      panning = { x: ev.clientX, y: ev.clientY, vx: view.x, vy: view.y };
-      bg.setPointerCapture(ev.pointerId);
-      svg.style.cursor = "grabbing";
-    });
-    bg.addEventListener("pointermove", (ev) => {
-      if (!panning) return;
-      const rect = svg.getBoundingClientRect();
-      view.x = panning.vx + ((ev.clientX - panning.x) * width) / rect.width;
-      view.y = panning.vy + ((ev.clientY - panning.y) * height) / rect.height;
-      paint();
-    });
-    const endPan = (ev) => {
-      if (!panning) return;
-      panning = null;
-      svg.style.cursor = "grab";
+    if (graphNetwork) {
       try {
-        bg.releasePointerCapture(ev.pointerId);
+        graphNetwork.destroy();
       } catch (_) {
         /* ignore */
       }
-    };
-    bg.addEventListener("pointerup", endPan);
-    bg.addEventListener("pointercancel", endPan);
+      graphNetwork = null;
+    }
+    graphNodesDS = null;
+    graphEdgesDS = null;
+    graphHubId = null;
+  }
 
-    svg.addEventListener(
+  function shortLabel(text, n = 10) {
+    const t = String(text || "").trim();
+    return t.length <= n ? t : t.slice(0, n - 1) + "…";
+  }
+
+  function graphCacheKey(mode, q) {
+    return `${mode}:${String(q || "").trim()}`;
+  }
+
+  function putGraphCache(key, data) {
+    if (graphCache.has(key)) graphCache.delete(key);
+    graphCache.set(key, data);
+    while (graphCache.size > GRAPH_CACHE_MAX) {
+      const oldest = graphCache.keys().next().value;
+      graphCache.delete(oldest);
+    }
+  }
+
+  function buildVisNodes(rawNodes, hubId) {
+    return rawNodes.map((n) => {
+      const group = n.group || "author";
+      const isHub = n.id === hubId;
+      const color = COLORS[group] || COLORS.author;
+      const size = isHub ? 26 : 10 + Math.min(Number(n.value) || 1, 14);
+      return {
+        id: n.id,
+        label: shortLabel(n.label || n.id, isHub ? 12 : 9),
+        title: `${GROUP_LABELS[group] || group} · ${n.title || n.label || n.id}`,
+        group,
+        value: Number(n.value) || 1,
+        query: n.query || n.label || n.id,
+        fullLabel: n.label || n.id,
+        shape: GRAPH_SHAPES[group] || "dot",
+        size,
+        borderWidth: isHub ? 3 : 1.5,
+        borderWidthSelected: 3,
+        color: {
+          background: color,
+          border: isHub ? "#e37400" : color,
+          highlight: { background: color, border: "#202124" },
+          hover: { background: color, border: "#202124" },
+        },
+        font: {
+          color: "#202124",
+          size: isHub ? 14 : 12,
+          face: "Noto Sans SC, Roboto, sans-serif",
+          strokeWidth: 3,
+          strokeColor: "#ffffff",
+        },
+      };
+    });
+  }
+
+  function buildVisEdges(rawEdges) {
+    return rawEdges.map((e, i) => ({
+      id: e.id || `e${i}`,
+      from: e.from,
+      to: e.to,
+      value: Math.max(1, Number(e.value) || 1),
+      title: e.title || e.label || "",
+      color: {
+        color: "#c5cad3",
+        highlight: "#5f6368",
+        hover: "#80868b",
+        opacity: 0.8,
+      },
+      smooth: false,
+    }));
+  }
+
+  function physicsOptions(stabilize) {
+    return {
+      enabled: !!stabilize,
+      solver: "barnesHut",
+      barnesHut: {
+        gravitationalConstant: -2800,
+        centralGravity: 0.25,
+        springLength: 95,
+        springConstant: 0.04,
+        damping: 0.55,
+        avoidOverlap: 0.2,
+      },
+      stabilization: stabilize
+        ? { enabled: true, iterations: 36, fit: true }
+        : { enabled: false },
+    };
+  }
+
+  const GRAPH_INTERACTION = {
+    hover: true,
+    tooltipDelay: 100,
+    hideEdgesOnDrag: true,
+    navigationButtons: true,
+    keyboard: { enabled: false },
+    // Disable default wheel-zoom: trackpad inertia over the canvas feels like "mouse enter = zoom"
+    zoomView: false,
+    dragView: true,
+    dragNodes: true,
+    multiselect: false,
+  };
+
+  let graphPointerDirty = false;
+
+  /** Ctrl/⌘ + wheel zooms; plain wheel leaves page/trackpad scroll alone. */
+  function bindGraphCtrlZoom() {
+    if (!graphCanvas || graphCanvas.dataset.ctrlZoomBound === "1") return;
+    graphCanvas.dataset.ctrlZoomBound = "1";
+    graphCanvas.addEventListener(
       "wheel",
       (ev) => {
+        if (!graphNetwork) return;
+        if (!(ev.ctrlKey || ev.metaKey)) return;
         ev.preventDefault();
-        const rect = svg.getBoundingClientRect();
-        const mx = ((ev.clientX - rect.left) * width) / rect.width;
-        const my = ((ev.clientY - rect.top) * height) / rect.height;
-        const factor = ev.deltaY < 0 ? 1.1 : 0.9;
-        const nextK = Math.min(4.5, Math.max(0.3, view.k * factor));
-        view.x = mx - ((mx - view.x) * nextK) / view.k;
-        view.y = my - ((my - view.y) * nextK) / view.k;
-        view.k = nextK;
-        // radii/fonts are in world units; scale(k) keeps them proportional
-        paint();
+        ev.stopPropagation();
+        const scale = graphNetwork.getScale() || 1;
+        const factor = ev.deltaY < 0 ? 1.12 : 1 / 1.12;
+        const next = Math.min(3.5, Math.max(0.25, scale * factor));
+        graphNetwork.moveTo({ scale: next, animation: false });
       },
       { passive: false }
     );
+  }
 
-    function tick() {
-      graphAnim = null;
-      const cx = hub ? hub.x : width / 2;
-      const cy = hub ? hub.y : height / 2;
-      if (alpha > 0.015 || dragging) {
-        if (!dragging) alpha *= 0.985;
-        for (let i = 0; i < nodes.length; i++) {
-          if (!nodes[i].visible) continue;
-          for (let j = i + 1; j < nodes.length; j++) {
-            if (!nodes[j].visible) continue;
-            const a = nodes[i];
-            const b = nodes[j];
-            let dx = b.x - a.x;
-            let dy = b.y - a.y;
-            let dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
-            const force = (900 * alpha) / (dist * dist);
-            dx = (dx / dist) * force;
-            dy = (dy / dist) * force;
-            if (a.fx == null) {
-              a.vx -= dx;
-              a.vy -= dy;
-            }
-            if (b.fx == null) {
-              b.vx += dx;
-              b.vy += dy;
-            }
-          }
-        }
-        for (const l of links) {
-          if (!l.source.visible || !l.target.visible) continue;
-          const dx = l.target.x - l.source.x;
-          const dy = l.target.y - l.source.y;
-          const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
-          const target = 88 + l.value * 8;
-          const f = ((dist - target) * 0.035 * Math.max(alpha, 0.05)) / dist;
-          if (l.source.fx == null) {
-            l.source.vx += dx * f;
-            l.source.vy += dy * f;
-          }
-          if (l.target.fx == null) {
-            l.target.vx -= dx * f;
-            l.target.vy -= dy * f;
-          }
-        }
-        for (const n of nodes) {
-          if (!n.visible) continue;
-          if (n.fx != null) {
-            n.x = n.fx;
-            n.y = n.fy;
-            n.vx = 0;
-            n.vy = 0;
-          } else {
-            n.vx += (cx - n.x) * 0.012 * alpha;
-            n.vy += (cy - n.y) * 0.012 * alpha;
-            n.vx *= 0.86;
-            n.vy *= 0.86;
-            n.x += n.vx;
-            n.y += n.vy;
-          }
-        }
-        // keep hub pinned at geometric center of layout space
-        if (hub && hub.fx != null) {
-          hub.x = hub.fx;
-          hub.y = hub.fy;
-        }
-        paint();
-        graphAnim = requestAnimationFrame(tick);
-      } else {
-        paint();
-      }
+  /** Break stuck drag/pan state (common after mid-drag DataSet updates). */
+  function releaseGraphPointer(force = false) {
+    if (!graphNetwork) return;
+    if (!force && !graphPointerDirty) return;
+    graphPointerDirty = false;
+    try {
+      graphNetwork.setOptions({
+        physics: { enabled: false },
+        interaction: {
+          ...GRAPH_INTERACTION,
+          dragView: false,
+          dragNodes: false,
+        },
+      });
+      graphNetwork.setOptions({ interaction: { ...GRAPH_INTERACTION } });
+    } catch (_) {
+      /* ignore */
     }
+  }
 
-    buildLegend();
-    applyFilter();
-    // center view on hub
-    view.x = width / 2 - hub.x * view.k;
-    view.y = height / 2 - hub.y * view.k;
-    tick();
+  function expandNodeAsCenter(meta, hubId) {
+    if (!meta) return;
+    const modeMap = {
+      author: "author",
+      collaborator: "author",
+      keyword: "keyword",
+      institution: "institution",
+      paper: "paper",
+    };
+    const mode = modeMap[meta.group];
+    if (!mode) return;
+    const q = String(meta.query || meta.label || "").trim();
+    if (!q) return;
+    if (hubId && meta.id === hubId) {
+      if (graphNetwork) {
+        releaseGraphPointer(true);
+        graphNetwork.selectNodes([hubId]);
+        graphNetwork.fit({
+          animation: { duration: 180, easingFunction: "easeInOutQuad" },
+        });
+      }
+      return;
+    }
+    const modeEl = $("#graph-mode");
+    const queryEl = $("#graph-query");
+    if (modeEl) modeEl.value = mode;
+    if (queryEl) {
+      queryEl.value = q;
+      queryEl.placeholder = GRAPH_HINTS[mode] || "";
+    }
+    graphStatus.textContent = `展开中心：${meta.label}…`;
+    releaseGraphPointer(true);
+    loadGraph().catch(() => {});
+  }
 
+  function updateGraphStatus(data, rawNodes) {
     const counts = {};
     for (const n of rawNodes) counts[n.group] = (counts[n.group] || 0) + 1;
     const parts = Object.entries(counts)
       .map(([g, c]) => `${GROUP_LABELS[g] || g}${c}`)
       .join(" · ");
 
-    let head = parts || `${nodes.length} 节点`;
+    let head = parts || `${rawNodes.length} 节点`;
     if (data.author) {
       const a = data.author;
       head = `${a.name_zh || a.name_en || ""} · 发文 ${a.paper_count ?? "-"} · ${parts}`;
@@ -1399,7 +1176,191 @@
     } else if (data.paper) {
       head = `${data.paper.title || data.paper.doi || ""} · ${parts}`;
     }
-    graphStatus.textContent = `${head}　·　点击节点切换中心 / 右上角筛选 / 拖拽平移 / 滚轮缩放`;
+    graphStatus.textContent = `${head}　·　点击节点展开两跳子图 / 拖拽平移 / Ctrl+滚轮或右下角按钮缩放`;
+  }
+
+  function buildLegend(presentGroups, enabledGroups, nodeItems, hubId) {
+    if (!graphLegend) return;
+    graphLegend.innerHTML = "";
+    const title = document.createElement("div");
+    title.className = "legend-title";
+    title.textContent = "类型筛选";
+    graphLegend.appendChild(title);
+    presentGroups.forEach((g) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.dataset.group = g;
+      if (!enabledGroups.has(g)) btn.classList.add("is-off");
+      const sw = document.createElement("span");
+      sw.className = "swatch";
+      sw.style.background = COLORS[g] || "#888";
+      const lab = document.createElement("span");
+      lab.textContent = GROUP_LABELS[g] || g;
+      btn.appendChild(sw);
+      btn.appendChild(lab);
+      btn.addEventListener("click", () => {
+        if (enabledGroups.has(g)) {
+          if (enabledGroups.size <= 1) return;
+          enabledGroups.delete(g);
+          btn.classList.add("is-off");
+        } else {
+          enabledGroups.add(g);
+          btn.classList.remove("is-off");
+        }
+        if (!graphNodesDS) return;
+        graphNodesDS.update(
+          nodeItems.map((n) => ({
+            id: n.id,
+            hidden: !enabledGroups.has(n.group),
+          }))
+        );
+        if (hubId && !enabledGroups.has(nodeItems.find((n) => n.id === hubId)?.group)) {
+          const next = nodeItems.find((n) => enabledGroups.has(n.group));
+          if (next && graphNetwork) {
+            graphNetwork.selectNodes([next.id]);
+            graphNetwork.focus(next.id, {
+              scale: graphNetwork.getScale(),
+              animation: { duration: 180 },
+            });
+          }
+        }
+      });
+      graphLegend.appendChild(btn);
+    });
+  }
+
+  function renderGraph(data) {
+    const rawNodes = data.nodes || [];
+    const rawEdges = data.edges || [];
+    if (!rawNodes.length) {
+      stopGraph();
+      graphCanvas.innerHTML = "";
+      if (graphLegend) graphLegend.innerHTML = "";
+      graphStatus.textContent = "无节点";
+      return;
+    }
+    if (typeof vis === "undefined" || !vis.Network) {
+      stopGraph();
+      graphCanvas.innerHTML = "";
+      graphStatus.textContent = "图谱组件加载失败，请检查网络后刷新";
+      return;
+    }
+
+    const hubId = rawNodes[0].id;
+    graphHubId = hubId;
+    const presentGroups = [];
+    const seenG = new Set();
+    for (const n of rawNodes) {
+      const g = n.group || "author";
+      if (!seenG.has(g)) {
+        seenG.add(g);
+        presentGroups.push(g);
+      }
+    }
+    const enabledGroups = new Set(presentGroups);
+    const nodeItems = buildVisNodes(rawNodes, hubId);
+    const edgeItems = buildVisEdges(rawEdges);
+
+    const finishLayout = (() => {
+      let done = false;
+      return () => {
+        if (done || !graphNetwork) return;
+        done = true;
+        graphNetwork.setOptions({ physics: physicsOptions(false) });
+        // fit only — avoid focus({scale}) which looks like unexpected zoom
+        graphNetwork.fit({
+          animation: { duration: 180, easingFunction: "easeInOutQuad" },
+        });
+        graphNetwork.selectNodes([hubId]);
+      };
+    })();
+
+    if (graphNetwork && graphNodesDS && graphEdgesDS) {
+      releaseGraphPointer(true);
+      graphNetwork.setOptions({ physics: physicsOptions(true) });
+      graphNodesDS.clear();
+      graphEdgesDS.clear();
+      graphNodesDS.add(nodeItems);
+      graphEdgesDS.add(edgeItems);
+      graphNetwork.once("stabilizationIterationsDone", finishLayout);
+      setTimeout(finishLayout, 400);
+    } else {
+      graphNodesDS = new vis.DataSet(nodeItems);
+      graphEdgesDS = new vis.DataSet(edgeItems);
+      graphCanvas.innerHTML = "";
+      graphNetwork = new vis.Network(
+        graphCanvas,
+        { nodes: graphNodesDS, edges: graphEdgesDS },
+        {
+          autoResize: true,
+          interaction: { ...GRAPH_INTERACTION },
+          physics: physicsOptions(true),
+          nodes: { scaling: { min: 10, max: 32 }, margin: 6 },
+          edges: {
+            width: 1.1,
+            selectionWidth: 2,
+            hoverWidth: 1.6,
+            scaling: { min: 1, max: 3 },
+          },
+        }
+      );
+      bindGraphCtrlZoom();
+      graphNetwork.once("stabilizationIterationsDone", finishLayout);
+      graphNetwork.on("dragStart", () => {
+        graphPointerDirty = true;
+      });
+      graphNetwork.on("dragEnd", () => releaseGraphPointer(true));
+      graphNetwork.on("click", (params) => {
+        if (!params.nodes.length) return;
+        const id = params.nodes[0];
+        const meta = graphNodesDS.get(id);
+        if (!meta || meta.hidden) return;
+        const payload = {
+          id: meta.id,
+          group: meta.group,
+          label: meta.fullLabel || meta.label,
+          query: meta.query,
+        };
+        // Defer so vis finishes mouseup / internal drag cleanup before we swap data
+        setTimeout(() => expandNodeAsCenter(payload, graphHubId), 40);
+      });
+      if (!window.__graphPointerReleaseBound) {
+        window.__graphPointerReleaseBound = true;
+        const onUp = () => releaseGraphPointer(false);
+        window.addEventListener("pointerup", onUp);
+        window.addEventListener("pointercancel", onUp);
+      }
+    }
+
+    buildLegend(presentGroups, enabledGroups, nodeItems, hubId);
+    updateGraphStatus(data, rawNodes);
+
+    // Prefetch 1-hop neighbors for snappier next clicks
+    const modeMap = {
+      author: "author",
+      collaborator: "author",
+      keyword: "keyword",
+      institution: "institution",
+      paper: "paper",
+    };
+    const prefetch = [];
+    for (const n of rawNodes.slice(0, 18)) {
+      if (n.id === hubId) continue;
+      const mode = modeMap[n.group];
+      const q = String(n.query || n.label || "").trim();
+      if (!mode || !q) continue;
+      const key = graphCacheKey(mode, q);
+      if (!graphCache.has(key)) prefetch.push({ mode, q, key });
+    }
+    if (prefetch.length) {
+      setTimeout(() => {
+        prefetch.slice(0, 6).forEach(({ mode, q, key }) => {
+          fetchGraphData(mode, q)
+            .then((d) => putGraphCache(key, d))
+            .catch(() => {});
+        });
+      }, 80);
+    }
   }
 
   const GRAPH_HINTS = {
@@ -1416,6 +1377,19 @@
     paper: "",
   };
 
+  async function fetchGraphData(mode, q) {
+    if (mode === "author") {
+      return api(`/graph/network/author?name=${encodeURIComponent(q)}&limit=20`);
+    }
+    if (mode === "keyword") {
+      return api(`/graph/network/keyword?keyword=${encodeURIComponent(q)}&limit=20`);
+    }
+    if (mode === "institution") {
+      return api(`/graph/network/institution?name=${encodeURIComponent(q)}&limit=20`);
+    }
+    return api(`/graph/network/paper?doi=${encodeURIComponent(q)}`);
+  }
+
   async function loadGraph() {
     const mode = $("#graph-mode").value;
     const q = $("#graph-query").value.trim();
@@ -1423,23 +1397,41 @@
       graphStatus.textContent = GRAPH_HINTS[mode] || "请输入查询";
       return;
     }
-    graphStatus.textContent = "加载中…";
+    const key = graphCacheKey(mode, q);
+    const seq = ++graphLoadSeq;
+    const cached = graphCache.get(key);
+    graphLoading = !cached;
+
+    if (cached) {
+      renderGraph(cached);
+    } else {
+      graphStatus.textContent = "加载中…";
+    }
+
     try {
-      let data;
-      if (mode === "author") {
-        data = await api(`/graph/network/author?name=${encodeURIComponent(q)}&limit=20`);
-      } else if (mode === "keyword") {
-        data = await api(`/graph/network/keyword?keyword=${encodeURIComponent(q)}&limit=20`);
-      } else if (mode === "institution") {
-        data = await api(`/graph/network/institution?name=${encodeURIComponent(q)}&limit=20`);
+      const data = await fetchGraphData(mode, q);
+      if (seq !== graphLoadSeq) return;
+      putGraphCache(key, data);
+      // Skip identical re-render when cache already shown and payload unchanged
+      if (
+        !cached ||
+        cached.nodes?.length !== data.nodes?.length ||
+        cached.edges?.length !== data.edges?.length ||
+        cached.nodes?.[0]?.id !== data.nodes?.[0]?.id
+      ) {
+        renderGraph(data);
       } else {
-        data = await api(`/graph/network/paper?doi=${encodeURIComponent(q)}`);
+        updateGraphStatus(data, data.nodes || []);
       }
-      renderGraph(data);
     } catch (err) {
-      stopGraph();
-      graphCanvas.innerHTML = "";
-      graphStatus.textContent = `失败：${err.message || err}`;
+      if (seq !== graphLoadSeq) return;
+      if (!cached) {
+        stopGraph();
+        graphCanvas.innerHTML = "";
+        graphStatus.textContent = `失败：${err.message || err}`;
+      }
+    } finally {
+      if (seq === graphLoadSeq) graphLoading = false;
     }
   }
 
