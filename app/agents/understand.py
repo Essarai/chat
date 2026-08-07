@@ -27,6 +27,10 @@ AUTHOR_PROFILE_RE = re.compile(
     r"([一-龥A-Za-z·]{2,4})(?:老师|教授|研究员)?(?:的)?"
     r"(?:全部发文|发文情况|发文概况|发文统计|发文趋势|论文情况|科研情况|发文)"
 )
+AUTHOR_TRAJECTORY_RE = re.compile(
+    r"(?:分析|请分析)?([一-龥A-Za-z·]{2,4})(?:老师|教授|研究员)?(?:的)?"
+    r"(?:研究轨迹|学术轨迹|科研轨迹)"
+)
 AUTHOR_COLLAB_INST_RE = re.compile(
     r"([一-龥A-Za-z·]{2,4})(?:老师|教授|研究员)?(?:的)?合作(?:者|的作者)?.*"
     r"(?:所属)?(?:机构|单位)"
@@ -97,6 +101,18 @@ _BAD_AUTHOR_NAMES = {
     "学术",
     "发展",
     "该刊",
+    "变化",
+    "主题",
+    "题变",
+    "化和",
+    "变化和",
+    "题变化和",
+    "作者变",
+    "合作作",
+    "团队",
+    "领域",
+    "水稻",
+    "番茄",
 }
 
 
@@ -107,7 +123,7 @@ def _looks_like_person_name(name: str) -> bool:
         return False
     # reject abstract nouns commonly glued before 机构/研究
     if re.search(
-        r"(研究|机构|单位|方向|趋势|历程|阶段|学科|期刊|论文|作者|核心|代表|表性|演变|发展)",
+        r"(研究|机构|单位|方向|趋势|历程|阶段|学科|期刊|论文|作者|核心|代表|表性|演变|发展|变化|主题|领域|团队)",
         name,
     ):
         return False
@@ -143,6 +159,7 @@ def extract_author_name(question: str) -> Optional[str]:
         return None
 
     for pattern in (
+        AUTHOR_TRAJECTORY_RE,
         NAME_WITH_PREP_RE,
         AUTHOR_COLLAB_INST_RE,
         AUTHOR_PROFILE_RE,
@@ -157,7 +174,7 @@ def extract_author_name(question: str) -> Optional[str]:
         if not _looks_like_person_name(name):
             continue
         # For NAME_RE (…机构), require real person context, not「代表性研究机构」
-        if pattern is NAME_RE and re.search(r"代表性|研究机构|核心作者", question or ""):
+        if pattern is NAME_RE and re.search(r"代表性|研究机构|核心作者|主题变化|合作作者变化", question or ""):
             continue
         return name
     return None

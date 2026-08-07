@@ -80,8 +80,33 @@ def collect_allowed_papers(state: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     """Map doi_lower -> {doi, title, year} from SQL/RAG/KG evidence."""
     by_doi: Dict[str, Dict[str, Any]] = {}
     y0, y1 = _year_window(state)
+    plan = state.get("query_plan") or {}
+    sql = state.get("sql_evidence") or {}
+    task = (plan.get("task") or sql.get("task") or sql.get("scope") or "").strip()
+    sources = list(plan.get("sources") or state.get("intents") or [])
+    sql_only_tasks = {
+        "unsupported_citations",
+        "hotspot_compare",
+        "top_institutions",
+        "yearly_growth",
+        "topic_coverage",
+        "author_profile",
+        "coauthored_papers",
+        "keyword_authors",
+    }
+    author_scoped = task in {"author_profile", "author"} or sql.get("scope") == "author"
+    exclude_rag = (
+        task in sql_only_tasks
+        or sources == ["sql"]
+        or (len(sources) == 1 and sources[0] == "sql")
+    )
+    if task == "unsupported_citations" or sql.get("scope") == "unsupported":
+        return {}
 
     def _year_ok(year: Any) -> bool:
+        # Author profiles span full career — do not clip by journal window.
+        if author_scoped:
+            return True
         if y0 is None and y1 is None:
             return True
         if year is None:
@@ -110,7 +135,6 @@ def collect_allowed_papers(state: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
             "year": year if year is not None else prev.get("year"),
         }
 
-    sql = state.get("sql_evidence") or {}
     for p in sql.get("papers") or sql.get("recent_papers") or []:
         add_paper(p.get("doi"), p.get("title_zh") or p.get("title"), p.get("year"))
     for d in sql.get("directions") or []:
@@ -120,6 +144,10 @@ def collect_allowed_papers(state: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
         if isinstance(a, dict):
             for p in a.get("papers") or []:
                 add_paper(p.get("doi"), p.get("title_zh") or p.get("title"), p.get("year"))
+
+    # Author / SQL-only tasks: do not admit RAG or unrelated KG keyword papers.
+    if author_scoped or exclude_rag:
+        return by_doi
 
     rag = state.get("rag_evidence") or {}
     for h in rag.get("hits") or []:

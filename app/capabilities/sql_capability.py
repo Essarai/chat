@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from app.agents.understand import (
@@ -95,6 +96,46 @@ def _period_triples(y0: int, y1: int) -> List[tuple]:
     return periods
 
 
+def _parse_top_n(plan: Dict[str, Any], question: str, default: int = 10) -> int:
+    if plan.get("top_n") is not None:
+        try:
+            return max(1, min(int(plan["top_n"]), 50))
+        except (TypeError, ValueError):
+            pass
+    m = re.search(r"前\s*(\d{1,2})", question or "")
+    if m:
+        return max(1, min(int(m.group(1)), 50))
+    return default
+
+
+def _hotspot_windows(
+    question: str, y0: Optional[int], y1: Optional[int]
+) -> List[tuple]:
+    """Build prior-N vs recent-N keyword windows (default 10+10 years).
+
+    Do not clamp the prior window with a 「近N年」-derived y0 — that would
+    collapse prior into an empty/invalid range.
+    """
+    q = question or ""
+    end = datetime.now().year
+    # Prefer explicit 近N年 end, else plan end_year, else current year
+    m_near = re.search(r"近\s*(\d{1,2})\s*年", q)
+    m_prior = re.search(r"前\s*(\d{1,2})\s*年", q)
+    near_n = int(m_near.group(1)) if m_near else 10
+    prior_n = int(m_prior.group(1)) if m_prior else near_n
+    if y1 is not None and not m_near:
+        end = int(y1)
+    near_start = end - near_n + 1
+    prior_end = near_start - 1
+    prior_start = prior_end - prior_n + 1
+    if prior_start > prior_end:
+        prior_start = prior_end
+    return [
+        (f"前{prior_n}年({prior_start}-{prior_end})", prior_start, prior_end),
+        (f"近{near_n}年({near_start}-{end})", near_start, end),
+    ]
+
+
 def execute_plan(
     plan: Dict[str, Any],
     question: str = "",
@@ -128,6 +169,69 @@ def execute_plan(
         "source": "sqlite",
     }
 
+    if "unsupported_citations" in ops or task == "unsupported_citations":
+        return {
+            "scope": "unsupported",
+            "task": "unsupported_citations",
+            "reason": (
+                "本库 papers 表无被引/引用次数字段，无法按被引用次数排名高被引论文。"
+            ),
+            "source": "sqlite",
+            "start_year": y0,
+            "end_year": y1,
+        }
+
+    if "hotspot_compare" in ops or task == "hotspot_compare":
+        windows = _hotspot_windows(question, y0, y1)
+        periods = []
+        for label, a, b in windows:
+            kws_rows = db.top_keywords(15, a, b)
+            periods.append(
+                {
+                    "period": label,
+                    "start_year": a,
+                    "end_year": b,
+                    "paper_count": sum(
+                        int(r.get("paper_count") or 0)
+                        for r in db.yearly_counts(a, b)
+                    ),
+                    "keywords": kws_rows,
+                }
+            )
+        return {
+            "scope": "hotspot_compare",
+            "task": "hotspot_compare",
+            "periods": periods,
+            "start_year": periods[0]["start_year"] if periods else y0,
+            "end_year": periods[-1]["end_year"] if periods else y1,
+            "source": "sqlite",
+        }
+
+    if "topic_coverage" in ops or task == "topic_coverage":
+        if not kws:
+            kws = ["基因编辑", "CRISPR", "基因组编辑"]
+        stats = db.topic_keyword_stats(kws, y0, y1)
+        papers: List[Dict[str, Any]] = []
+        seen = set()
+        for kw in kws:
+            for p in db.papers_by_keyword(str(kw), limit=8, start_year=y0, end_year=y1):
+                doi = (p.get("doi") or "").lower()
+                if doi and doi not in seen:
+                    seen.add(doi)
+                    papers.append(p)
+        total = sum(int(r.get("paper_count") or 0) for r in (stats.get("topic_keywords") or []))
+        return {
+            **stats,
+            "scope": "topic_coverage",
+            "task": "topic_coverage",
+            "papers": papers,
+            "total_hits": total,
+            "keywords_queried": kws,
+            "start_year": y0,
+            "end_year": y1,
+            "source": "sqlite",
+        }
+
     if "journal_overview" in ops or task == "journal_overview":
         return db.journal_overview(y0, y1)
 
@@ -150,7 +254,21 @@ def execute_plan(
             # Pair coauthor questions should not expand to full collaborator dumps.
             if entities.get("author_name_b") and re.search(r"合作|合著|共著", q):
                 return evidence
-            if any(k in q for k in ("机构", "单位", "合作", "发文", "概况", "情况", "分布")):
+            if any(
+                k in q
+                for k in (
+                    "机构",
+                    "单位",
+                    "合作",
+                    "发文",
+                    "概况",
+                    "情况",
+                    "分布",
+                    "轨迹",
+                    "主题",
+                    "首次发表",
+                )
+            ):
                 evidence["collaborator_institutions"] = db.collaborator_institutions(author)
                 evidence["collaborators"] = db.author_collaborators(author, limit=15)
             return evidence
@@ -214,9 +332,13 @@ def execute_plan(
         evidence["scope"] = evidence.get("scope") or "top_teams"
 
     if "top_institutions" in ops:
-        evidence["institutions"] = db.top_institutions(15, y0, y1)
+        top_n = _parse_top_n(plan, question, default=10 if task == "top_institutions" else 15)
+        evidence["institutions"] = db.top_institutions(top_n, y0, y1)
         evidence["task"] = task
-        evidence["scope"] = evidence.get("scope") or "top_teams"
+        evidence["scope"] = (
+            "top_institutions" if task == "top_institutions" else (evidence.get("scope") or "top_teams")
+        )
+        evidence["top_n"] = top_n
 
     if "keywords_by_periods" in ops and y0 is not None and y1 is not None:
         evidence["periods"] = db.keywords_by_periods(_period_triples(int(y0), int(y1)), 8)

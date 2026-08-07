@@ -121,6 +121,7 @@ class ChatOrchestrator:
                 "route_reason": final.get("route_reason"),
                 "route": final.get("route"),
                 "query_plan": final.get("query_plan"),
+                "analysis_plan": final.get("analysis_plan"),
                 "goal": final.get("goal"),
                 "stage": final.get("stage"),
                 "evidence_bundle": final.get("evidence_bundle"),

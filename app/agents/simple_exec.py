@@ -30,13 +30,23 @@ def _evidence_enough(source: str, data: Dict[str, Any]) -> bool:
     if not data or data.get("error"):
         return False
     if source == "sql":
+        if data.get("scope") == "unsupported" or data.get("task") == "unsupported_citations":
+            return True
+        if data.get("scope") in {
+            "hotspot_compare",
+            "topic_coverage",
+            "top_institutions",
+        }:
+            return True
         if data.get("yearly") or data.get("yoy") or data.get("authors"):
+            return True
+        if data.get("institutions"):
             return True
         if data.get("scope") == "author" and data.get("author"):
             return True
         if data.get("scope") == "keyword_authors" and data.get("authors") is not None:
             return True
-        if data.get("keywords") or data.get("papers"):
+        if data.get("keywords") or data.get("papers") or data.get("periods"):
             return True
         return bool(data.get("task") or data.get("scope"))
     if source == "kg":

@@ -36,10 +36,28 @@ SYSTEM_PROMPT = """你是《浙江大学学报（农业与生命科学版）》�
 """
 
 
-def _build_instruction(intents: List[str], evidence: str = "", task: str = "") -> str:
+def _build_instruction(
+    intents: List[str],
+    evidence: str = "",
+    task: str = "",
+    analysis_plan: Optional[Dict[str, Any]] = None,
+) -> str:
     has_rag = "rag" in intents
     only_struct = bool(intents) and not has_rag
     author_scoped = "【作者个人统计" in (evidence or "")
+    analysis_plan = analysis_plan or {}
+    shape = analysis_plan.get("answer_shape") or ""
+    subgoals = analysis_plan.get("subgoals") or []
+    analysis_hint = ""
+    if subgoals:
+        analysis_hint = (
+            "必须按分析规划组织回答，覆盖这些子任务："
+            + "；".join(f"[{s.get('type')}]{s.get('desc')}" for s in subgoals[:6])
+            + "。"
+        )
+        if shape:
+            analysis_hint += f"回答形态优先遵循 answer_shape={shape}。"
+
     insight = (
         "回答形态：洞察式综述（结论→机制/格局→关键证据），"
         "禁止写成「年份: N篇」逐行数据报告；"
@@ -52,15 +70,34 @@ def _build_instruction(intents: List[str], evidence: str = "", task: str = "") -
             "列举论文或合作者时必须用有序序号 1. 2. 3.，每条一行；"
             "合作者格式：`1. **姓名**（N篇）：机构A / 机构B`；"
             "论文须全部列出；DOI 纯文本；链接用 [查看全文](url)；禁止 HTML。"
+            + analysis_hint
         )
-    if task in {"topic_evolution", "keyword_collab", "journal_overview", "yearly_growth"}:
+    if task in {
+        "topic_evolution",
+        "keyword_collab",
+        "journal_overview",
+        "yearly_growth",
+        "hotspot_compare",
+        "top_institutions",
+        "topic_coverage",
+        "author_profile",
+    }:
+        extra = ""
+        if task in {
+            "yearly_growth",
+            "hotspot_compare",
+            "top_institutions",
+            "topic_coverage",
+            "author_profile",
+        }:
+            extra = "本题为 SQL 结构化任务：禁止编造 DOI；禁止引用证据外论文；名单必须来自证据。"
         return (
-            f"本题任务={task}。{insight}"
+            f"本题任务={task}。{insight}{extra}{analysis_hint}"
             "凡必须点名的名单用有序序号；不要写参考文献；DOI 用纯文本。"
         )
     if only_struct:
         return (
-            f"本题为结构化分析（SQL/KG）。{insight}"
+            f"本题为结构化分析（SQL/KG）。{insight}{analysis_hint}"
             "凡名单/分布必须用有序序号 1. 2. 3.，每条一行；"
             "不要写参考文献；DOI 用纯文本。"
         )
@@ -69,9 +106,10 @@ def _build_instruction(intents: List[str], evidence: str = "", task: str = "") -
             "本题为文献内容问答。请基于 [RAG] 证据作答并提炼观点；"
             "文末可列相关论文（题名、DOI 纯文本、证据中的链接），不要空的参考文献，不要 HTML。"
             "DOI/年份必须落在证据约束清单内。"
+            + analysis_hint
         )
     return (
-        f"本题可能同时涉及结构证据与文献。{insight}"
+        f"本题可能同时涉及结构证据与文献。{insight}{analysis_hint}"
         "优先用 SQL/KG 回答关系/统计部分；仅当证据中确有相关论文时再附 DOI/链接；"
         "DOI 用纯文本；不要 HTML。"
     )
@@ -482,6 +520,284 @@ def try_keyword_authors_template_answer(state: JournalState) -> Optional[str]:
     return _ensure_ordered_list_markdown("\n".join(lines))
 
 
+def try_unsupported_citations_template(state: JournalState) -> Optional[str]:
+    sql = state.get("sql_evidence") or {}
+    plan = state.get("query_plan") or {}
+    if (
+        sql.get("scope") != "unsupported"
+        and sql.get("task") != "unsupported_citations"
+        and plan.get("task") != "unsupported_citations"
+    ):
+        return None
+    reason = sql.get("reason") or (
+        "本库 papers 表无被引/引用次数字段，无法按被引用次数排名高被引论文。"
+    )
+    return (
+        f"## 无法完成高被引排名\n\n"
+        f"{reason}\n\n"
+        "如需了解高影响力研究，可改问：近 N 年热门关键词、高产作者/机构，"
+        "或某主题的代表论文（基于题名/摘要检索）。"
+    )
+
+
+def try_hotspot_compare_template(state: JournalState) -> Optional[str]:
+    sql = state.get("sql_evidence") or {}
+    if sql.get("scope") != "hotspot_compare" and sql.get("task") != "hotspot_compare":
+        return None
+    periods = sql.get("periods") or []
+    if len(periods) < 2:
+        return None
+    prior, recent = periods[0], periods[1]
+    prior_map = {
+        r.get("keyword"): int(r.get("paper_count") or 0)
+        for r in (prior.get("keywords") or [])
+        if r.get("keyword")
+    }
+    recent_map = {
+        r.get("keyword"): int(r.get("paper_count") or 0)
+        for r in (recent.get("keywords") or [])
+        if r.get("keyword")
+    }
+    risen = [
+        k
+        for k in recent_map
+        if k not in prior_map or recent_map[k] > prior_map.get(k, 0)
+    ][:8]
+    fallen = [
+        k
+        for k in prior_map
+        if k not in recent_map or prior_map[k] > recent_map.get(k, 0)
+    ][:8]
+    lines = [
+        "## 研究热点对比（关键词频次）",
+        "",
+        f"### {prior.get('period')}（约 {prior.get('paper_count')} 篇）",
+        "",
+    ]
+    for i, r in enumerate((prior.get("keywords") or [])[:12], 1):
+        lines.append(f"{i}. **{r.get('keyword')}**（{r.get('paper_count')}篇）")
+    lines += ["", f"### {recent.get('period')}（约 {recent.get('paper_count')} 篇）", ""]
+    for i, r in enumerate((recent.get("keywords") or [])[:12], 1):
+        lines.append(f"{i}. **{r.get('keyword')}**（{r.get('paper_count')}篇）")
+    lines += ["", "### 变化摘要", ""]
+    if risen:
+        lines.append("- 近窗相对走强或新晋：" + "、".join(risen))
+    if fallen:
+        lines.append("- 前窗更突出、近窗回落或淡出：" + "、".join(fallen))
+    lines.append("")
+    lines.append("> 以上均来自本刊 SQLite 关键词统计，非主观抽样。")
+    return _ensure_ordered_list_markdown("\n".join(lines))
+
+
+def try_top_institutions_template(state: JournalState) -> Optional[str]:
+    sql = state.get("sql_evidence") or {}
+    if sql.get("scope") != "top_institutions" and sql.get("task") != "top_institutions":
+        return None
+    insts = sql.get("institutions") or []
+    if not insts:
+        return None
+    top_n = sql.get("top_n") or len(insts)
+    y0, y1 = sql.get("start_year"), sql.get("end_year")
+    lines = [
+        f"## 机构发文量 Top{top_n}",
+        "",
+        f"统计区间：{y0 or '不限'}–{y1 or '不限'}（按论文–机构关联去重计数）",
+        "",
+    ]
+    for i, inst in enumerate(insts[:top_n], 1):
+        lines.append(
+            f"{i}. **{inst.get('institution')}**（{inst.get('paper_count')}篇）"
+        )
+    lines.append("")
+    lines.append(
+        "> 说明：机构名按库内规范化字段统计；学院级单位可能分列。"
+        "本库无独立「国籍」字段，「中国作者」题默认按全库机构排名。"
+    )
+    return _ensure_ordered_list_markdown("\n".join(lines))
+
+
+def try_topic_coverage_template(state: JournalState) -> Optional[str]:
+    sql = state.get("sql_evidence") or {}
+    if sql.get("scope") != "topic_coverage" and sql.get("task") != "topic_coverage":
+        return None
+    topic = sql.get("topic_keywords") or []
+    papers = sql.get("papers") or []
+    total = int(sql.get("total_hits") or 0)
+    queried = sql.get("keywords_queried") or []
+    thin = (not topic) or all(int(r.get("paper_count") or 0) == 0 for r in topic) or total == 0
+    lines = [
+        "## 专题覆盖与投稿建议",
+        "",
+        f"查询关键词：{'、'.join(queried) or '（无）'}",
+        f"区间：{sql.get('start_year') or '不限'}–{sql.get('end_year') or '不限'}",
+        "",
+    ]
+    if thin:
+        lines += [
+            "### 判断：覆盖偏薄，不宜以该主题作为主投稿方向",
+            "",
+            "本刊结构化关键词中，上述专题词命中很少或为 0。"
+            "若研究方向高度聚焦基因编辑/CRISPR，建议改投更对口期刊，"
+            "或先检索相邻主题（如基因表达、转基因、分子育种）再决定。",
+            "",
+        ]
+    else:
+        lines += [
+            "### 判断：有一定相关基础，可作参考投稿，但需核对栏目匹配度",
+            "",
+            "关键词命中：",
+            "",
+        ]
+        for i, r in enumerate(topic, 1):
+            lines.append(f"{i}. **{r.get('keyword')}**（{r.get('paper_count')}篇）")
+        lines.append("")
+    if papers:
+        lines += ["### 可参考的本刊相关论文（仅证据内）", ""]
+        for i, p in enumerate(papers[:10], 1):
+            title = (p.get("title_zh") or p.get("title") or "（无题名）").strip()
+            year = p.get("year")
+            doi = (p.get("doi") or "").strip()
+            url = doi_url(doi) or ""
+            year_bit = f"（{year}）" if year else ""
+            bits = [f"{i}. **{title}**{year_bit}"]
+            if doi:
+                bits.append(f"DOI: {doi}")
+            if url:
+                bits.append(f"[查看全文]({url})")
+            lines.append(" ".join(bits))
+    return _ensure_ordered_list_markdown("\n".join(lines))
+
+
+def try_yearly_growth_template(state: JournalState) -> Optional[str]:
+    sql = state.get("sql_evidence") or {}
+    plan = state.get("query_plan") or {}
+    if sql.get("task") != "yearly_growth" and plan.get("task") != "yearly_growth":
+        return None
+    rows = sql.get("yoy") or []
+    if not rows:
+        return None
+    fg = sql.get("fastest_growth")
+    # growth / decline streaks (ignore incomplete last year if sharp drop)
+    growth_years = [
+        r for r in rows if r.get("delta") is not None and int(r.get("delta") or 0) > 0
+    ]
+    decline_years = [
+        r for r in rows if r.get("delta") is not None and int(r.get("delta") or 0) < 0
+    ]
+    last = rows[-1] if rows else None
+    incomplete_note = ""
+    if last and last.get("yoy_pct") is not None and float(last["yoy_pct"]) <= -40:
+        incomplete_note = (
+            f"\n\n> 注意：{last.get('year')} 年发文 {last.get('paper_count')} 篇、"
+            f"同比 {last.get('yoy_pct')}%，很可能为**未完年/数据未齐**，不宜直接解读为断崖下跌。"
+        )
+    lines = [
+        "## 年度发文趋势与增速",
+        "",
+        f"区间：{sql.get('start_year')}–{sql.get('end_year')}",
+        "",
+    ]
+    if fg:
+        lines.append(
+            f"**增长最快年份：** {fg.get('year')} "
+            f"（Δ{fg.get('delta'):+d}，同比 {fg.get('yoy_pct')}%）"
+        )
+        lines.append("")
+    lines.append("### 逐年发文（含同比）")
+    lines.append("")
+    for r in rows:
+        if r.get("delta") is None:
+            lines.append(f"- {r.get('year')}：{r.get('paper_count')} 篇")
+        else:
+            pct = r.get("yoy_pct")
+            pct_s = f"{pct}%" if pct is not None else "—"
+            lines.append(
+                f"- {r.get('year')}：{r.get('paper_count')} 篇"
+                f"（Δ{r.get('delta'):+d}，同比 {pct_s}）"
+            )
+    lines += ["", "### 增长期与下降期（基于同比）", ""]
+    if growth_years:
+        lines.append(
+            "- 同比增长年份："
+            + "、".join(str(r.get("year")) for r in growth_years)
+        )
+    if decline_years:
+        # exclude suspected incomplete last year from "decline period" narrative list
+        shown = [
+            r
+            for r in decline_years
+            if not (
+                last
+                and r.get("year") == last.get("year")
+                and last.get("yoy_pct") is not None
+                and float(last["yoy_pct"]) <= -40
+            )
+        ]
+        if shown:
+            lines.append(
+                "- 同比下降年份：" + "、".join(str(r.get("year")) for r in shown)
+            )
+    lines.append(incomplete_note)
+    return "\n".join(lines).strip()
+
+
+def try_author_trajectory_template(state: JournalState) -> Optional[str]:
+    sql = state.get("sql_evidence") or {}
+    q = state.get("question") or ""
+    if sql.get("scope") != "author":
+        return None
+    if not re.search(r"轨迹|首次发表|主题变化|合作作者变化|合作者变化", q):
+        return None
+    author = sql.get("author") or {}
+    name = author.get("name_zh") or sql.get("author_name") or "该作者"
+    papers = sql.get("papers") or sql.get("recent_papers") or []
+    kws = sql.get("keywords") or []
+    collab = sql.get("collaborators") or {}
+    inst = sql.get("collaborator_institutions") or {}
+    people = inst.get("collaborators") or collab.get("collaborators") or []
+    lines = [
+        f"## {name} 的研究轨迹",
+        "",
+        f"- **首次发表年份：** {sql.get('year_min') or '未知'}",
+        f"- **最近发文年份：** {sql.get('year_max') or '未知'}",
+        f"- **本刊发文总量：** {sql.get('total_papers') or len(papers)} 篇",
+        "",
+        "### 研究主题（论文关键词频次）",
+        "",
+    ]
+    if kws:
+        for i, r in enumerate(kws[:12], 1):
+            lines.append(f"{i}. **{r.get('keyword')}**（{r.get('paper_count')}篇）")
+    else:
+        lines.append("（无关键词统计）")
+    lines += ["", "### 合作作者变化（按合著篇数）", ""]
+    if people:
+        for i, c in enumerate(people[:15], 1):
+            cname = (c.get("name_zh") or c.get("name_en") or "").strip()
+            co = c.get("co_papers")
+            org = _org_text(c.get("institutions"))
+            co_bit = f"（{co}篇）" if co is not None else ""
+            lines.append(f"{i}. **{cname}**{co_bit}：{org}")
+    else:
+        lines.append("（暂无合作者统计）")
+    lines += ["", f"### 本刊发文列表（共 {len(papers)} 篇）", ""]
+    for i, p in enumerate(papers, 1):
+        title = (p.get("title_zh") or p.get("title") or "（无题名）").strip()
+        year = p.get("year")
+        doi = (p.get("doi") or "").strip()
+        url = doi_url(doi) or ""
+        year_bit = f"（{year}）" if year else ""
+        bits = [f"{i}. **{title}**{year_bit}"]
+        if doi:
+            bits.append(f"DOI: {doi}")
+        if url:
+            bits.append(f"[查看全文]({url})")
+        lines.append(" ".join(bits))
+    lines.append("")
+    lines.append("> 以上仅含该作者在本刊的结构化记录，未混入其他作者论文。")
+    return _ensure_ordered_list_markdown("\n".join(lines))
+
+
 def try_coauthored_papers_template_answer(state: JournalState) -> Optional[str]:
     sql = state.get("sql_evidence") or {}
     if sql.get("scope") != "coauthored_papers" and sql.get("task") != "coauthored_papers":
@@ -514,9 +830,24 @@ def try_coauthored_papers_template_answer(state: JournalState) -> Optional[str]:
 
 def try_author_template_answer(state: JournalState) -> Optional[str]:
     """
-    Format author papers / collaborators directly from SQL evidence.
+    Format structured answers directly from SQL evidence when possible.
     Avoids LLM truncation and broken ** markers on long lists.
     """
+    refuse = try_unsupported_citations_template(state)
+    if refuse:
+        return refuse
+    hotspot = try_hotspot_compare_template(state)
+    if hotspot:
+        return hotspot
+    inst = try_top_institutions_template(state)
+    if inst:
+        return inst
+    coverage = try_topic_coverage_template(state)
+    if coverage:
+        return coverage
+    yearly = try_yearly_growth_template(state)
+    if yearly:
+        return yearly
     overview = try_journal_overview_template_answer(state)
     if overview:
         return overview
@@ -526,6 +857,9 @@ def try_author_template_answer(state: JournalState) -> Optional[str]:
     kw_ans = try_keyword_authors_template_answer(state)
     if kw_ans:
         return kw_ans
+    traj = try_author_trajectory_template(state)
+    if traj:
+        return traj
 
     sql = state.get("sql_evidence") or {}
     if sql.get("scope") != "author":
@@ -545,15 +879,15 @@ def try_author_template_answer(state: JournalState) -> Optional[str]:
 
     papers = sql.get("papers") or sql.get("recent_papers") or []
     collab = sql.get("collaborators") or {}
-    inst = sql.get("collaborator_institutions") or {}
-    people = inst.get("collaborators") or collab.get("collaborators") or []
+    inst_data = sql.get("collaborator_institutions") or {}
+    people = inst_data.get("collaborators") or collab.get("collaborators") or []
     if not papers and not people:
         return None
 
     author = sql.get("author") or {}
     name = author.get("name_zh") or sql.get("author_name") or "该作者"
 
-    ask_papers = bool(re.search(r"发文|论文|全部|著作|题名|DOI", q))
+    ask_papers = bool(re.search(r"发文|论文|全部|著作|题名|DOI|轨迹|主题", q))
     ask_collab = bool(re.search(r"合作|机构|合著", q))
     # 纯合作/机构 → 只列合作者；纯发文 → 只列论文；兼问或含糊 → 两者都给
     if ask_collab and not ask_papers:
@@ -698,19 +1032,22 @@ def build_generate_messages(state: JournalState) -> List[Dict[str, str]]:
     plan = state.get("query_plan") or {}
     focus = plan.get("focus") or ""
     task = plan.get("task") or ""
+    analysis = state.get("analysis_plan") or {}
+    analysis_shape = analysis.get("answer_shape") or plan.get("analysis_shape") or ""
     ledger = build_evidence_ledger(state)
 
     # intents/reason are for model grounding only — never ask it to echo them.
     user_prompt = (
         f"用户问题: {question}\n"
-        f"（内部参考，勿写入回答）任务={task}; 证据通道: {intents}; {reason}\n"
+        f"（内部参考，勿写入回答）任务={task}; shape={analysis_shape}; "
+        f"证据通道: {intents}; {reason}\n"
         f"{('任务焦点: ' + focus + chr(10)) if focus else ''}"
         f"\n以下是各 Agent 汇总证据:\n{evidence}\n\n"
         f"{ledger}\n\n"
-        f"{_build_instruction(intents, evidence, task)}\n"
-        "必须紧扣用户问题与任务焦点做综合推理与升维总结；"
+        f"{_build_instruction(intents, evidence, task, analysis)}\n"
+        "必须紧扣用户问题与分析规划做综合推理与升维总结；"
         "禁止答非所问、套用无关全刊概览，或把证据复述成数据报表。"
-        "只输出面向用户的最终答案，不要输出路由、意图或修正说明。"
+        "只输出面向用户的最终答案，不要输出路由、意图、分析规划原文或修正说明。"
     )
     messages: List[Dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]
     max_h = settings.chat_max_history

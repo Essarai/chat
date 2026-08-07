@@ -44,7 +44,77 @@ def _format_sql(data: Dict[str, Any]) -> str:
                 f"预计算·增长最快年份: {fg.get('year')} "
                 f"（Δ{fg.get('delta'):+d}，同比 {fg.get('yoy_pct')}%）"
             )
-        lines.append("回答须列出主要年份数量，并明确指出增长最快的年份。")
+        lines.append(
+            "回答须列出主要年份数量，识别快速增长期与下降期，"
+            "并明确指出增长最快的年份；若末年发文量异常偏低，提示可能为未完年。"
+        )
+        return "\n".join(lines)
+
+    if data.get("scope") == "unsupported" or task == "unsupported_citations":
+        return (
+            "[SQL]【能力不足·拒答】"
+            + (data.get("reason") or "本库无被引字段，无法按引用次数排名。")
+        )
+
+    if data.get("scope") == "hotspot_compare" or task == "hotspot_compare":
+        lines = ["[SQL]【两窗研究热点对比】"]
+        for p in data.get("periods") or []:
+            pk = ", ".join(
+                f"{r.get('keyword')}({r.get('paper_count')})"
+                for r in (p.get("keywords") or [])[:12]
+            )
+            lines.append(
+                f"阶段 {p.get('period')}（约 {p.get('paper_count')} 篇）热词: {pk or '无'}"
+            )
+        lines.append("请对比两窗热词异同，指出上升/回落主题；禁止编造未出现的关键词。")
+        return "\n".join(lines)
+
+    if data.get("scope") == "topic_coverage" or task == "topic_coverage":
+        y0, y1 = data.get("start_year"), data.get("end_year")
+        lines = [
+            f"[SQL]【专题关键词覆盖】区间: {y0}-{y1}",
+            "查询词: " + ", ".join(data.get("keywords_queried") or []),
+            f"合计命中(按词频累加，可重叠): {data.get('total_hits')}",
+        ]
+        topic = data.get("topic_keywords") or []
+        if not topic or all(int(r.get("paper_count") or 0) == 0 for r in topic):
+            lines.append(
+                "专题相关关键词几乎无命中。回答须说明该主题在本刊覆盖偏薄，"
+                "不宜以该主题作为主投稿方向；禁止用近义但未命中的词冒充。"
+            )
+        else:
+            lines.append(
+                "词频: "
+                + ", ".join(
+                    f"{r.get('keyword')}({r.get('paper_count')})" for r in topic[:15]
+                )
+            )
+        papers = data.get("papers") or []
+        if papers:
+            lines.append(f"可推荐的相关论文（共 {len(papers)} 篇，仅可引用下列 DOI）:")
+            for i, p in enumerate(papers[:12], 1):
+                doi = p.get("doi") or ""
+                url = doi_url(doi) or ""
+                year = p.get("year")
+                year_bit = f"（{year}）" if year else ""
+                link = f" [查看全文]({url})" if url else ""
+                doi_bit = f" DOI: {doi}" if doi else ""
+                lines.append(
+                    f"{i}. {p.get('title_zh') or p.get('title')}{year_bit}{doi_bit}{link}"
+                )
+        return "\n".join(lines)
+
+    if data.get("scope") == "top_institutions" or task == "top_institutions":
+        y0, y1 = data.get("start_year"), data.get("end_year")
+        top_n = data.get("top_n") or len(data.get("institutions") or [])
+        lines = [
+            f"[SQL]【机构发文排名 Top{top_n}】区间: {y0}-{y1}",
+            "下列按发文量列出机构（回答必须据此完整列出，勿编造）:",
+        ]
+        for i, inst in enumerate((data.get("institutions") or [])[:top_n], 1):
+            lines.append(
+                f"{i}. {inst.get('institution')}（{inst.get('paper_count')}篇）"
+            )
         return "\n".join(lines)
 
     if data.get("scope") == "topic_stats" or task == "topic_evolution":
@@ -404,6 +474,12 @@ def merge_node(state: JournalState) -> Dict[str, Any]:
     focus = plan.get("focus") or state.get("goal") or ""
     if focus:
         parts.append(f"[任务焦点] {focus}")
+
+    analysis = state.get("analysis_plan") or {}
+    if analysis.get("subgoals"):
+        from app.agents.analysis_planner import format_analysis_plan_for_prompt
+
+        parts.append(format_analysis_plan_for_prompt(analysis))
 
     route = state.get("route") or {}
     if route:

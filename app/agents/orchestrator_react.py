@@ -32,6 +32,9 @@ SQL_OPS = {
     "keywords_by_periods",
     "author_profile",
     "author_keywords_sample",
+    "unsupported_citations",
+    "hotspot_compare",
+    "topic_coverage",
     "execute_plan",
     "legacy",
 }
@@ -179,7 +182,17 @@ def _build_sql_plan(args: Dict[str, Any], question: str, entities: Dict[str, Any
         kws = list(AI_TOPIC_KWS)
     if not ops:
         # infer from task hints
-        if task == "yearly_growth" or "增长" in (question or ""):
+        if task == "unsupported_citations":
+            ops = ["unsupported_citations"]
+        elif task == "hotspot_compare":
+            ops = ["hotspot_compare"]
+        elif task == "topic_coverage":
+            ops = ["topic_coverage"]
+        elif task == "top_institutions":
+            ops = ["top_institutions"]
+        elif task == "author_profile":
+            ops = ["author_profile"]
+        elif task == "yearly_growth" or "增长" in (question or ""):
             ops = ["yearly_counts", "yoy_growth"]
             task = "yearly_growth"
         elif task == "journal_overview" or "发展历程" in (question or ""):
@@ -215,6 +228,7 @@ def _build_sql_plan(args: Dict[str, Any], question: str, entities: Dict[str, Any
         "keywords": kws,
         "author_name": args.get("author_name") or entities.get("author_name"),
         "top_n_directions": args.get("top_n_directions") or 3,
+        "top_n": args.get("top_n"),
         "focus": args.get("purpose") or "",
     }
 
@@ -383,15 +397,20 @@ def _decide(
     }
     bundle = state.get("evidence_bundle") or []
     goal = state.get("goal") or question
+    analysis = state.get("analysis_plan") or {}
+    from app.agents.analysis_planner import format_analysis_plan_for_prompt
+
+    analysis_block = format_analysis_plan_for_prompt(analysis)
     obs = "\n".join(
         f"step{b.get('step')}: ({b.get('source')}/{b.get('operation')}) {b.get('summary')}"
         for b in bundle[-4:]
     ) or "（尚无证据）"
 
-    prompt = f"""你是期刊知识助手的 Controller（受控 ReAct）。根据用户问题与已有证据，选择下一步唯一动作。
+    prompt = f"""你是期刊知识助手的 Controller（受控 ReAct）。根据「分析规划」子任务与已有证据，选择下一步唯一动作。
+优先满足尚未完成的分析子任务；动作用于取证（sql/kg/rag），不要把分析子任务本身当作工具名。
 只输出 JSON：
 {{
-  "thought": "简短理由",
+  "thought": "简短理由（可点名正在推进哪个分析子任务）",
   "action": "sql_agent|kg_agent|rag_agent|finish",
   "args": {{}},
   "status": "continue|done"
@@ -399,17 +418,20 @@ def _decide(
 
 工具说明：
 - sql_agent: 结构化统计。args 可含 task, sql_ops[], keywords[], year_start, year_end, author_name, top_n_directions
-  常用 task: yearly_growth, topic_evolution, keyword_collab, top_directions_with_papers, top_teams, journal_overview, author_profile, keyword_authors
-  常用 sql_ops: yearly_counts,yoy_growth,journal_overview,top_keywords,papers_by_top_keywords,authors_by_keyword,institutions_by_keyword,top_authors,top_institutions,keywords_by_periods,author_keywords_sample,topic_keyword_counts,topic_yearly,author_profile
+  常用 task: yearly_growth, topic_evolution, keyword_collab, top_directions_with_papers, top_teams, journal_overview, author_profile, keyword_authors, hotspot_compare, topic_coverage, top_institutions
+  常用 sql_ops: yearly_counts,yoy_growth,journal_overview,top_keywords,papers_by_top_keywords,authors_by_keyword,institutions_by_keyword,top_authors,top_institutions,keywords_by_periods,author_keywords_sample,topic_keyword_counts,topic_yearly,author_profile,hotspot_compare,topic_coverage
 - kg_agent: 合作/实体关系。args 可含 operation(keyword_ego|author_ego), keywords[], author_name
 - rag_agent: 语义文献。args 可含 queries[]
-- finish: 证据足够，结束检索。args 可含 reason
+- finish: 分析子任务所需证据已齐。args 可含 reason
 
 规则：
 1. 每步只选一个 action。
-2. 需要中间结果时分多步（如先 top_keywords 再 rag）。
-3. 已有足够回答证据时必须 finish。
+2. 先按分析规划顺序取证；需要中间结果时分多步。
+3. 分析规划中的 needs 已覆盖且证据足够时必须 finish。
 4. 不要重复完全相同的调用。
+5. 禁止虚构被引排名等库中不存在的能力。
+
+{analysis_block}
 
 目标: {goal}
 用户问题: {question}
@@ -428,10 +450,101 @@ def _decide(
     return _parse_json(raw)
 
 
-def _heuristic_first_action(question: str, entities: Dict[str, Any]) -> Dict[str, Any]:
-    """Deterministic first step when useful; reduces LLM flakiness on Q.md."""
+def _heuristic_first_action(
+    question: str,
+    entities: Dict[str, Any],
+    analysis_plan: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Deterministic first step when useful; prefer analysis_plan seed hint."""
+    analysis_plan = analysis_plan or {}
+    hint = analysis_plan.get("seed_query_hint") or {}
+    if hint.get("task") or hint.get("sql_ops"):
+        sources = hint.get("sources") or []
+        if sources == ["rag"] or (
+            hint.get("task") == "generic" and not hint.get("sql_ops")
+        ):
+            return {
+                "thought": "按分析规划启动语义检索",
+                "action": "rag_agent",
+                "args": {"queries": [question]},
+                "status": "continue",
+            }
+        args = dict(hint)
+        return {
+            "thought": f"按分析规划首步取证: {hint.get('task') or hint.get('sql_ops')}",
+            "action": "sql_agent",
+            "args": args,
+            "status": "continue",
+        }
+
     q = question or ""
-    if re.search(r"(每年|逐年).*(发文|数量)|增长最快", q):
+    if re.search(r"被引用|引用次数|高被引|被引次数", q):
+        return {
+            "thought": "库无被引字段，直接拒答",
+            "action": "sql_agent",
+            "args": {
+                "task": "unsupported_citations",
+                "sql_ops": ["unsupported_citations"],
+            },
+            "status": "continue",
+        }
+    if re.search(
+        r"前\s*\d+.*机构|机构.*前\s*\d+|排名前.*机构|中国作者.*机构",
+        q,
+    ):
+        m = re.search(r"前\s*(\d{1,2})", q)
+        top_n = int(m.group(1)) if m else 10
+        return {
+            "thought": "机构发文排名",
+            "action": "sql_agent",
+            "args": {
+                "task": "top_institutions",
+                "sql_ops": ["top_institutions"],
+                "top_n": top_n,
+            },
+            "status": "continue",
+        }
+    if re.search(r"热点.*变化|研究热点|近\s*\d+\s*年.*前\s*\d+\s*年", q):
+        return {
+            "thought": "两窗关键词热点对比",
+            "action": "sql_agent",
+            "args": {"task": "hotspot_compare", "sql_ops": ["hotspot_compare"]},
+            "status": "continue",
+        }
+    if re.search(r"适合投稿|基因编辑|CRISPR", q, re.I) and re.search(
+        r"投稿|相关论文|参考|研究方向为", q
+    ):
+        kws = list(entities.get("keywords") or [])
+        for term in ("基因编辑", "CRISPR", "基因组编辑", "基因敲除"):
+            if term not in kws:
+                kws.append(term)
+        return {
+            "thought": "专题关键词覆盖统计",
+            "action": "sql_agent",
+            "args": {
+                "task": "topic_coverage",
+                "sql_ops": ["topic_coverage"],
+                "keywords": kws[:8],
+            },
+            "status": "continue",
+        }
+    if entities.get("author_name") and re.search(
+        r"研究轨迹|首次发表|主题变化|合作作者变化|合作者变化", q
+    ):
+        return {
+            "thought": "作者个人发文与合作者",
+            "action": "sql_agent",
+            "args": {
+                "task": "author_profile",
+                "sql_ops": ["author_profile"],
+                "author_name": entities.get("author_name"),
+            },
+            "status": "continue",
+        }
+    if re.search(
+        r"(每年|逐年).*(发文|数量)|增长最快|增长期|下降期|年度发文趋势",
+        q,
+    ):
         return {
             "thought": "先取逐年发文与增速",
             "action": "sql_agent",
@@ -445,7 +558,9 @@ def _heuristic_first_action(question: str, entities: Dict[str, Any]) -> Dict[str
             "args": {"task": "journal_overview", "sql_ops": ["journal_overview"]},
             "status": "continue",
         }
-    if re.search(r"合作.*(作者|机构)|最紧密", q):
+    if re.search(r"合作.*(作者|机构)|最紧密", q) and not re.search(
+        r"合作作者变化|合作者变化|研究轨迹", q
+    ):
         kw = "水稻" if "水稻" in q else (entities.get("keywords") or ["水稻"])[0]
         return {
             "thought": "关键词合作作者与机构",
@@ -496,7 +611,9 @@ def _heuristic_first_action(question: str, entities: Dict[str, Any]) -> Dict[str
             },
             "status": "continue",
         }
-    if re.search(r"(研究)?主题.*(发展|演变|变化)|(发展|演变).*主题", q):
+    if re.search(r"(研究)?主题.*(发展|演变|变化)|(发展|演变).*主题", q) and not (
+        entities.get("author_name") and re.search(r"轨迹|首次发表|合作作者", q)
+    ):
         kws = list(entities.get("keywords") or [])
         for term in ("水稻", "番茄", "镉", "产量"):
             if term in q and term not in kws:
@@ -528,6 +645,9 @@ def react_controller_node(state: JournalState) -> Dict[str, Any]:
     seen_fps = set()
     goal = state.get("goal") or question
     working["goal"] = goal
+    # Preserve analysis_plan into working state
+    if state.get("analysis_plan"):
+        working["analysis_plan"] = state["analysis_plan"]
 
     # seed year window into entities
     y0, y1 = _years(question, entities)
@@ -540,7 +660,11 @@ def react_controller_node(state: JournalState) -> Dict[str, Any]:
     for step in range(1, MAX_STEPS + 1):
         decision: Dict[str, Any] = {}
         if step == 1 and not bundle:
-            decision = _heuristic_first_action(question, entities)
+            decision = _heuristic_first_action(
+                question,
+                entities,
+                working.get("analysis_plan") or state.get("analysis_plan"),
+            )
         if not decision:
             try:
                 decision = _decide(working, chat)
@@ -654,6 +778,23 @@ def react_controller_node(state: JournalState) -> Dict[str, Any]:
                     "action": "finish",
                     "args": {},
                     "observation": "auto-finish after yearly_growth",
+                }
+            )
+            break
+        if step >= 1 and action == "sql_agent" and args.get("task") in {
+            "unsupported_citations",
+            "hotspot_compare",
+            "top_institutions",
+            "topic_coverage",
+            "author_profile",
+        }:
+            trace.append(
+                {
+                    "step": step + 0.1,
+                    "thought": f"{args.get('task')} 数据已齐",
+                    "action": "finish",
+                    "args": {},
+                    "observation": f"auto-finish after {args.get('task')}",
                 }
             )
             break
@@ -853,6 +994,7 @@ def react_controller_node(state: JournalState) -> Dict[str, Any]:
         "react_trace": trace,
         "intents": intents,
         "query_plan": plan,
+        "analysis_plan": working.get("analysis_plan") or state.get("analysis_plan"),
         "goal": goal,
         "stage": "retrieving",
         "route_reason": (state.get("route_reason") or "") + f"; ReAct步数={len(trace)}",

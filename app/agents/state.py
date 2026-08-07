@@ -19,6 +19,7 @@ class JournalState(TypedDict, total=False):
     intents: List[str]
     route_reason: str
     query_plan: Dict[str, Any]  # lightweight plan for simple / tool hints
+    analysis_plan: Dict[str, Any]  # analysis subgoals (answer-side), not sql_ops
 
     # specialist evidence
     sql_evidence: Dict[str, Any]

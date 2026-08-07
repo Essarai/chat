@@ -21,6 +21,10 @@ def run_sql_agent(
         "journal_overview",
         "author_profile",
         "keyword_authors",
+        "unsupported_citations",
+        "hotspot_compare",
+        "topic_coverage",
+        "top_institutions",
     }:
         result = sql_capability.invoke(
             "execute_plan",
