@@ -53,12 +53,20 @@ class AskRequest(BaseModel):
 def health() -> Dict[str, Any]:
     """Liveness probe for Railway — must not call Chroma/Neo4j (may be unreachable)."""
     settings = get_settings()
+    vis_js = WEB_DIR / "vendor" / "vis-network.min.js"
+    vis_css = WEB_DIR / "vendor" / "vis-network.min.css"
     return {
         "ok": True,
         "chat_model": settings.minimax_chat_model,
         "embed_model": settings.minimax_embed_model,
         "collection": settings.chroma_collection,
         "sqlite_path": settings.sqlite_path,
+        "frontend": {
+            "asset_version": "20260807c",
+            "vis_network_js": vis_js.exists(),
+            "vis_network_css": vis_css.exists(),
+            "vis_network_js_bytes": vis_js.stat().st_size if vis_js.exists() else 0,
+        },
     }
 
 
@@ -256,7 +264,14 @@ def index() -> FileResponse:
     index_path = WEB_DIR / "index.html"
     if not index_path.exists():
         raise HTTPException(status_code=404, detail="frontend not found")
-    return FileResponse(index_path)
+    return FileResponse(
+        index_path,
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 if WEB_DIR.exists():

@@ -9,7 +9,8 @@
   --accent-hover: #1765cc;
   --accent-soft: #e8f0fe;
   --warm: #e37400;
-  --font: "Noto Sans SC", "Roboto", "PingFang SC", "Hiragino Sans GB", sans-serif;
+  --font: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC",
+    "Segoe UI", sans-serif;
   --header-h: 56px;
   --shadow: 0 1px 3px rgba(60, 64, 67, 0.12);
   --shadow-focus: 0 1px 6px rgba(32, 33, 36, 0.22);

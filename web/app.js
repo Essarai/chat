@@ -1023,7 +1023,7 @@
         font: {
           color: "#202124",
           size: isHub ? 14 : 12,
-          face: "Noto Sans SC, Roboto, sans-serif",
+          face: "PingFang SC, Hiragino Sans GB, Microsoft YaHei, sans-serif",
           strokeWidth: 3,
           strokeColor: "#ffffff",
         },
