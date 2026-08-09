@@ -157,15 +157,25 @@ def plan_analysis(
             )
         ]
       elif task == "yearly_growth":
+        ops = list(query_plan.get("sql_ops") or ["yearly_counts", "yoy_growth"])
+        if "top_keywords" not in ops and re.search(
+            r"热门关键词|热词|关键词", q
+        ):
+            ops.append("top_keywords")
         subgoals = [
             _subgoal(
                 "inventory",
-                "列出逐年发文量与同比增速",
+                "列出逐年发文量与同比增速"
+                + ("及热门关键词" if "top_keywords" in ops else ""),
                 needs=["sql"],
-                query_hint={"task": "yearly_growth", "sql_ops": ["yearly_counts", "yoy_growth"]},
+                query_hint={"task": "yearly_growth", "sql_ops": ops},
             ),
             _subgoal("trend", "识别快速增长期与下降期", needs=["sql"]),
-            _subgoal("explain", "结合发文波动说明可能原因（勿编造库外事实）", needs=["sql"]),
+            _subgoal(
+                "explain",
+                "结合发文波动说明可能原因（勿编造库外事实；勿引用办刊通告）",
+                needs=["sql"],
+            ),
         ]
       elif task == "hotspot_compare":
         subgoals = [
@@ -188,6 +198,35 @@ def plan_analysis(
             ),
             _subgoal("synthesize", "概括机构格局（如高校学院集中度）", needs=["sql"]),
         ]
+      elif task == "top_authors":
+        subgoals = [
+            _subgoal(
+                "inventory",
+                "按发文量统计高产作者名单",
+                needs=["sql"],
+                query_hint={"task": "top_authors", "sql_ops": ["top_authors"]},
+            ),
+            _subgoal("synthesize", "列出前 N 作者及发文量", needs=["sql"]),
+        ]
+      elif task == "institution_authors":
+        inst = query_plan.get("institution") or "该机构"
+        subgoals = [
+            _subgoal(
+                "inventory",
+                f"统计署名单位含「{inst}」的高产作者及代表论文",
+                needs=["sql"],
+                query_hint={
+                    "task": "institution_authors",
+                    "sql_ops": ["institution_authors"],
+                    "institution": inst,
+                },
+            ),
+            _subgoal(
+                "synthesize",
+                "归纳作者代表成果（勿用写该机构历史的文章冒充）",
+                needs=["sql"],
+            ),
+        ]
       elif task == "topic_coverage":
         subgoals = [
             _subgoal(
@@ -197,6 +236,92 @@ def plan_analysis(
                 query_hint={"task": "topic_coverage"},
             ),
             _subgoal("recommend", "据此判断投稿适合度并仅推荐证据内论文", needs=["sql"]),
+        ]
+      elif task == "submission_fit":
+        subgoals = [
+            _subgoal(
+                "coverage",
+                "统计专题关键词命中、近年趋势与代表论文",
+                needs=["sql"],
+                query_hint={"task": "submission_fit"},
+            ),
+            _subgoal(
+                "recommend",
+                "给出投稿适合度标签与证据内注意点",
+                needs=["sql"],
+            ),
+        ]
+      elif task == "topic_evolution":
+        kws = list(query_plan.get("keywords") or entities.get("keywords") or [])
+        label = "、".join(str(k) for k in kws[:3]) or "该主题"
+        subgoals = [
+            _subgoal(
+                "inventory",
+                f"统计专题「{label}」词频与逐年分布",
+                needs=["sql"],
+                query_hint={
+                    "task": "topic_evolution",
+                    "sql_ops": ["topic_keyword_counts", "topic_yearly"],
+                    "keywords": kws[:6],
+                },
+            ),
+            _subgoal("trend", f"归纳「{label}」发展阶段", needs=["sql"]),
+            _subgoal("synthesize", "总结专题演变（勿用全刊趋势冒充）", needs=["sql"]),
+        ]
+      elif task == "top_directions_with_papers":
+        subgoals = [
+            _subgoal(
+                "inventory",
+                "统计主要/新兴研究方向及代表论文",
+                needs=["sql"],
+                query_hint={
+                    "task": "top_directions_with_papers",
+                    "sql_ops": ["top_keywords", "papers_by_top_keywords"],
+                },
+            ),
+            _subgoal("synthesize", "归纳方向格局", needs=["sql"]),
+        ]
+      elif task == "top_teams":
+        subgoals = [
+            _subgoal(
+                "inventory",
+                "统计高产作者及其关键词样本",
+                needs=["sql"],
+                query_hint={
+                    "task": "top_teams",
+                    "sql_ops": ["top_authors", "author_keywords_sample"],
+                },
+            ),
+            _subgoal("profile", "识别跨多方向的作者", needs=["sql"]),
+            _subgoal("synthesize", "归纳多方向覆盖结论", needs=["sql"]),
+        ]
+      elif task == "journal_overview":
+        subgoals = [
+            _subgoal(
+                "inventory",
+                "汇总发文规模、热词、核心作者与机构",
+                needs=["sql"],
+                query_hint={"task": "journal_overview", "sql_ops": ["journal_overview"]},
+            ),
+            _subgoal("trend", "识别方向演变与阶段性热点", needs=["sql"]),
+            _subgoal("synthesize", "形成概览与投稿建议（证据内）", needs=["sql"]),
+        ]
+      elif task == "keyword_collab":
+        kws = list(query_plan.get("keywords") or entities.get("keywords") or [])
+        kw = kws[0] if kws else "该主题"
+        subgoals = [
+            _subgoal(
+                "inventory",
+                f"统计关键词「{kw}」相关高产作者与机构",
+                needs=["sql"],
+                query_hint={
+                    "task": "keyword_collab",
+                    "sql_ops": ["authors_by_keyword", "institutions_by_keyword"],
+                    "keywords": kws[:3] or [kw],
+                },
+            ),
+            _subgoal("network", "分析合作线索", needs=["sql"]),
+            _subgoal("synthesize", "归纳合作网络特点", needs=["sql"]),
         ]
       elif (task == "author_profile" and valid_author) or (
         valid_author
@@ -423,21 +548,46 @@ def analysis_planner_node(state: JournalState) -> Dict[str, Any]:
     plan["analysis_shape"] = analysis["answer_shape"]
     plan["focus"] = analysis["goal"]
     hint = analysis.get("seed_query_hint") or {}
+    router_task = str(query_plan.get("task") or "")
+    protected_tasks = {
+        "unsupported_citations",
+        "yearly_growth",
+        "hotspot_compare",
+        "top_institutions",
+        "top_authors",
+        "institution_authors",
+        "topic_coverage",
+        "submission_fit",
+        "topic_evolution",
+        "top_directions_with_papers",
+        "top_teams",
+        "journal_overview",
+        "author_profile",
+        "coauthored_papers",
+        "keyword_authors",
+        "keyword_collab",
+    }
     if hint.get("task"):
-        # Analysis seed wins when it corrects a mis-routed author_profile etc.
-        plan["task"] = hint["task"]
-    if hint.get("sql_ops"):
+        # Do not let open-analysis defaults wipe a concrete router/schema plan.
+        if router_task not in protected_tasks:
+            plan["task"] = hint["task"]
+    if hint.get("sql_ops") and router_task not in protected_tasks:
         plan["sql_ops"] = hint["sql_ops"]
-    if hint.get("keywords"):
+    if hint.get("keywords") and not plan.get("keywords"):
         plan["keywords"] = hint["keywords"]
         entities["keywords"] = hint["keywords"]
     if hint.get("author_name"):
         plan["author_name"] = hint["author_name"]
-    elif hint.get("task") in {
+    if hint.get("institution"):
+        plan["institution"] = hint["institution"]
+        entities["institution"] = hint["institution"]
+    elif plan.get("task") in {
         "journal_overview",
         "keyword_collab",
         "hotspot_compare",
         "top_institutions",
+        "top_authors",
+        "institution_authors",
         "yearly_growth",
         "topic_evolution",
         "top_teams",

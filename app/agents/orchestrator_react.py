@@ -35,6 +35,7 @@ SQL_OPS = {
     "unsupported_citations",
     "hotspot_compare",
     "topic_coverage",
+    "submission_fit",
     "execute_plan",
     "legacy",
 }
@@ -188,6 +189,8 @@ def _build_sql_plan(args: Dict[str, Any], question: str, entities: Dict[str, Any
             ops = ["hotspot_compare"]
         elif task == "topic_coverage":
             ops = ["topic_coverage"]
+        elif task == "submission_fit":
+            ops = ["submission_fit"]
         elif task == "top_institutions":
             ops = ["top_institutions"]
         elif task == "author_profile":
@@ -427,8 +430,8 @@ def _decide(
 
 工具说明：
 - sql_agent: 结构化统计。args 可含 task, sql_ops[], keywords[], year_start, year_end, author_name, top_n_directions
-  常用 task: yearly_growth, topic_evolution, keyword_collab, top_directions_with_papers, top_teams, journal_overview, author_profile, keyword_authors, hotspot_compare, topic_coverage, top_institutions
-  常用 sql_ops: yearly_counts,yoy_growth,journal_overview,top_keywords,papers_by_top_keywords,authors_by_keyword,institutions_by_keyword,top_authors,top_institutions,keywords_by_periods,author_keywords_sample,topic_keyword_counts,topic_yearly,author_profile,hotspot_compare,topic_coverage
+  常用 task: yearly_growth, topic_evolution, keyword_collab, top_directions_with_papers, top_teams, journal_overview, author_profile, keyword_authors, hotspot_compare, topic_coverage, submission_fit, top_institutions
+  常用 sql_ops: yearly_counts,yoy_growth,journal_overview,top_keywords,papers_by_top_keywords,authors_by_keyword,institutions_by_keyword,top_authors,top_institutions,keywords_by_periods,author_keywords_sample,topic_keyword_counts,topic_yearly,author_profile,hotspot_compare,topic_coverage,submission_fit
 - kg_agent: 合作/实体关系。args 可含 operation(keyword_ego|author_ego), keywords[], author_name
 - rag_agent: 语义文献。args 可含 queries[]
 - finish: 分析子任务所需证据已齐。args 可含 reason
@@ -550,8 +553,80 @@ def _heuristic_first_action(
             },
             "status": "continue",
         }
+    if re.search(r"研究过|关于", q) and re.search(r"作者", q) and re.search(
+        r"前\s*(\d{1,2}|十|五)|发文量.*前|高产",
+        q,
+    ):
+        kw = "水稻" if "水稻" in q else (
+            "番茄" if "番茄" in q else ((entities.get("keywords") or [None])[0])
+        )
+        m = re.search(
+            r"研究过\s*([\u4e00-\u9fffA-Za-z0-9]{1,8}?)(?=发文|论文|作者|的|相关|前)",
+            q,
+        )
+        if m:
+            kw = m.group(1)
+        return {
+            "thought": f"主题「{kw}」高产作者",
+            "action": "sql_agent",
+            "args": {
+                "task": "keyword_authors",
+                "sql_ops": ["authors_by_keyword"],
+                "keywords": [kw] if kw else [],
+            },
+            "status": "continue",
+        }
+    if (
+        re.search(r"作者", q)
+        and re.search(r"前\s*(\d{1,2}|十|五)|发文量.*前|高产作者|作者.*排名", q)
+        and not re.search(r"机构|单位|关键词|研究过|关于", q)
+    ):
+        return {
+            "thought": "高产作者排名走 SQL",
+            "action": "sql_agent",
+            "args": {"task": "top_authors", "sql_ops": ["top_authors"]},
+            "status": "continue",
+        }
     if re.search(
-        r"(每年|逐年).*(发文|数量)|增长最快|增长期|下降期|年度发文趋势",
+        r"(相关)?作者.*(代表|成果)|代表性成果",
+        q,
+    ) and re.search(r"大学|学院|研究院|研究所", q):
+        inst = "浙江大学" if "浙江大学" in q else ""
+        if not inst:
+            m = re.search(
+                r"([\u4e00-\u9fff]{2,20}(?:大学|学院|研究院|研究所))",
+                q,
+            )
+            inst = m.group(1) if m else "浙江大学"
+        return {
+            "thought": f"{inst} 作者代表成果走 SQL",
+            "action": "sql_agent",
+            "args": {
+                "task": "institution_authors",
+                "sql_ops": ["institution_authors"],
+                "institution": inst,
+                "top_n_authors": 8,
+                "papers_per_author": 3,
+            },
+            "status": "continue",
+        }
+    if re.search(
+        r"(发文趋势|逐年发文|年度发文).{0,12}(热门)?(关键词|热词)|"
+        r"(热门)?(关键词|热词).{0,12}(发文趋势|逐年发文)|"
+        r"近\s*\d+\s*年.*(发文趋势|热门关键词)",
+        q,
+    ):
+        return {
+            "thought": "发文趋势与热门关键词走 SQL",
+            "action": "sql_agent",
+            "args": {
+                "task": "yearly_growth",
+                "sql_ops": ["yearly_counts", "yoy_growth", "top_keywords"],
+            },
+            "status": "continue",
+        }
+    if re.search(
+        r"(每年|逐年).*(发文|数量)|增长最快|增长期|下降期|年度发文趋势|发文趋势",
         q,
     ):
         return {
@@ -798,7 +873,10 @@ def react_controller_node(state: JournalState) -> Dict[str, Any]:
             "unsupported_citations",
             "hotspot_compare",
             "top_institutions",
+            "top_authors",
+            "institution_authors",
             "topic_coverage",
+            "submission_fit",
             "author_profile",
         }:
             trace.append(

@@ -31,7 +31,13 @@ def run_sql_agent(
         "unsupported_citations",
         "hotspot_compare",
         "topic_coverage",
+        "submission_fit",
         "top_institutions",
+        "top_authors",
+        "institution_authors",
+        "topic_evolution",
+        "top_teams",
+        "journal_overview",
     } or "top_keywords" in (plan.get("sql_ops") or []):
         result = sql_capability.invoke("execute_plan", **kwargs)
     else:

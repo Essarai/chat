@@ -10,6 +10,7 @@ from langgraph.graph import END, START, StateGraph
 from app.agents.analysis_planner import analysis_planner_node
 from app.agents.fusion import fuse_evidence_node, fusion_node
 from app.agents.orchestrator_react import react_controller_node
+from app.agents.query_understand import query_understand_node
 from app.agents.router_v2 import extract_node, router_node
 from app.agents.simple_exec import simple_exec_node
 from app.agents.state import JournalState
@@ -30,6 +31,7 @@ def init_state(
         "top_k": top_k or settings.rag_top_k,
         "journal_id": settings.journal_id,
         "entities": {"dois": last_dois or []},
+        "intent": {},
         "errors": [],
         "stage": "init",
         "evidence_bundle": [],
@@ -54,6 +56,7 @@ def _route_after_simple(state: JournalState) -> str:
 def build_full_graph():
     g = StateGraph(JournalState)
     g.add_node("extract", extract_node)
+    g.add_node("query_understand", query_understand_node)
     g.add_node("router", router_node)
     g.add_node("analysis_planner", analysis_planner_node)
     g.add_node("simple_exec", simple_exec_node)
@@ -61,7 +64,8 @@ def build_full_graph():
     g.add_node("synthesize", fusion_node)
 
     g.add_edge(START, "extract")
-    g.add_edge("extract", "router")
+    g.add_edge("extract", "query_understand")
+    g.add_edge("query_understand", "router")
     g.add_edge("router", "analysis_planner")
     g.add_conditional_edges(
         "analysis_planner",
@@ -82,6 +86,7 @@ def build_prepare_graph():
     """Through evidence formatting only — answer streamed separately."""
     g = StateGraph(JournalState)
     g.add_node("extract", extract_node)
+    g.add_node("query_understand", query_understand_node)
     g.add_node("router", router_node)
     g.add_node("analysis_planner", analysis_planner_node)
     g.add_node("simple_exec", simple_exec_node)
@@ -89,7 +94,8 @@ def build_prepare_graph():
     g.add_node("fuse_evidence", fuse_evidence_node)
 
     g.add_edge(START, "extract")
-    g.add_edge("extract", "router")
+    g.add_edge("extract", "query_understand")
+    g.add_edge("query_understand", "router")
     g.add_edge("router", "analysis_planner")
     g.add_conditional_edges(
         "analysis_planner",

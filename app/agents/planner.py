@@ -62,10 +62,32 @@ def _pick_topic_kw(question: str, entities: Dict[str, Any]) -> List[str]:
 def rule_plan(question: str, entities: Dict[str, Any], intents: List[str]) -> Optional[Dict[str, Any]]:
     q = question or ""
 
-    # Q1: yearly counts + fastest growth
-    if re.search(r"(每年|逐年).*(发文|数量)|发文数量.*增长|增长最快", q) and re.search(
-        r"发文|数量|增长", q
+    # 发文趋势 + 热门关键词（UI 示例问句；勿走 RAG 办刊通告）
+    if re.search(
+        r"(发文趋势|逐年发文).{0,12}(热门)?(关键词|热词)|"
+        r"(热门)?(关键词|热词).{0,12}(发文趋势|逐年发文)|"
+        r"近\s*\d+\s*年.*(发文趋势|热门关键词)",
+        q,
     ):
+        y0, y1 = _years(entities, q, default_n=10)
+        return {
+            "task": "yearly_growth",
+            "sources": ["sql"],
+            "sql_ops": ["yearly_counts", "yoy_growth", "top_keywords"],
+            "kg_ops": [],
+            "rag_queries": [],
+            "focus": (
+                "列出逐年发文与热门关键词；严禁用办刊通告/获奖/影响因子作答。"
+            ),
+            "year_start": y0,
+            "year_end": y1,
+            "keywords": [],
+        }
+
+    # Q1: yearly counts + fastest growth
+    if re.search(
+        r"(每年|逐年).*(发文|数量)|发文数量.*增长|增长最快|发文趋势", q
+    ) and re.search(r"发文|数量|增长|趋势", q):
         y0, y1 = _years(entities, q, default_n=20)
         return {
             "task": "yearly_growth",

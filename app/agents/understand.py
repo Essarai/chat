@@ -10,6 +10,23 @@ from app.config import get_settings
 from app.services.minimax_chat import MiniMaxChat
 
 YEAR_RANGE_RE = re.compile(r"(?:近|最近|过去|前)\s*(\d{1,2})\s*年")
+YEAR_RANGE_CN_RE = re.compile(
+    r"(?:近|最近|过去|前)\s*(两|二|三|四|五|六|七|八|九|十|十五|二十)\s*年"
+)
+_CN_YEAR_N = {
+    "两": 2,
+    "二": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+    "十": 10,
+    "十五": 15,
+    "二十": 20,
+}
 YEAR_SPAN_RE = re.compile(r"(20\d{2})\s*[-~到至]\s*(20\d{2})")
 # "和/与/跟 + 姓名 + 合作" 优先，避免把「和」吃进姓名
 NAME_WITH_PREP_RE = re.compile(
@@ -26,6 +43,19 @@ AUTHOR_PREFIX_RE = re.compile(r"(?:作者|老师|教授)\s*([一-龥A-Za-z·]{2,
 AUTHOR_PROFILE_RE = re.compile(
     r"([一-龥A-Za-z·]{2,4})(?:老师|教授|研究员)?(?:的)?"
     r"(?:全部发文|发文情况|发文概况|发文统计|发文趋势|论文情况|科研情况|发文)"
+)
+# 徐建明在该期刊发表过哪些论文 / 徐建明的论文有哪些
+AUTHOR_PAPERS_RE = re.compile(
+    r"([一-龥A-Za-z·]{2,4})(?:老师|教授|研究员)?"
+    r"(?:在|于).{0,16}(?:期刊|学报|本刊|该刊)?"
+    r"(?:发表过|发表了|发表|刊发).{0,8}(?:哪些)?(?:论文|文章|文献)"
+)
+AUTHOR_PAPERS_LOOSE_RE = re.compile(
+    r"([一-龥A-Za-z·]{2,4})(?:老师|教授|研究员)?(?:的)?"
+    r"(?:全部)?(?:论文|文章)(?:有哪些|列表|清单)?"
+)
+AUTHOR_TEAM_RE = re.compile(
+    r"([一-龥A-Za-z·]{2,4})(?:老师|教授|研究员)?(?:的)?研究团队"
 )
 AUTHOR_TRAJECTORY_RE = re.compile(
     r"(?:分析|请分析)?([一-龥A-Za-z·]{2,4})(?:老师|教授|研究员)?(?:的)?"
@@ -53,6 +83,12 @@ def extract_year_window(question: str, default_last_n: Optional[int] = None):
         n = int(m.group(1))
         end = datetime.now().year
         return end - n + 1, end
+    m = YEAR_RANGE_CN_RE.search(question or "")
+    if m:
+        n = _CN_YEAR_N.get(m.group(1))
+        if n:
+            end = datetime.now().year
+            return end - n + 1, end
     if default_last_n:
         end = datetime.now().year
         return end - default_last_n + 1, end
@@ -112,7 +148,10 @@ _BAD_AUTHOR_NAMES = {
     "团队",
     "领域",
     "水稻",
-    "番茄",
+    "数量最多",
+    "发文量",
+    "发文数",
+    "最多的",
 }
 
 
@@ -160,6 +199,9 @@ def extract_author_name(question: str) -> Optional[str]:
 
     for pattern in (
         AUTHOR_TRAJECTORY_RE,
+        AUTHOR_TEAM_RE,
+        AUTHOR_PAPERS_RE,
+        AUTHOR_PAPERS_LOOSE_RE,
         NAME_WITH_PREP_RE,
         AUTHOR_COLLAB_INST_RE,
         AUTHOR_PROFILE_RE,

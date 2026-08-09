@@ -9,6 +9,8 @@ import json
 import re
 from pathlib import Path
 
+from editorial_filter import is_editorial_record
+
 
 def clean_space(s: str) -> str:
     s = (s or "").replace("\u3000", " ").replace("　", " ")
@@ -218,15 +220,35 @@ def main() -> None:
 
     seen_doi: set[str] = set()
     for i, row in enumerate(rows, start=1):
+        skip, reason = is_editorial_record(row)
+        if skip:
+            skipped.append(
+                {
+                    "doi": clean_space(row.get("doi", "")),
+                    "reason": reason,
+                    "title_zh": clean_space(row.get("title_zh", "")),
+                }
+            )
+            continue
         doc = to_rag_doc(row, i)
         doi = doc["doi"]
         if doi and doi in seen_doi:
-            skipped.append({"doi": doi, "reason": "duplicate_doi"})
-            continue
+            stem = Path(clean_space(row.get("source_xml", ""))).stem or f"row{i}"
+            new_doi = f"{doi}__{stem}"
+            doc["doi"] = new_doi
+            doc["doc_id"] = new_doi
+            doc["chunk_id"] = f"{new_doi}#0"
+            doi = new_doi
         if doi:
             seen_doi.add(doi)
         if doc["text_length"] < args.min_text_length:
-            skipped.append({"doi": doi, "reason": f"text_too_short:{doc['text_length']}"})
+            skipped.append(
+                {
+                    "doi": doi,
+                    "reason": f"text_too_short:{doc['text_length']}",
+                    "title_zh": doc["title_zh"],
+                }
+            )
             continue
         docs.append(doc)
 
@@ -253,10 +275,16 @@ def main() -> None:
 
     skip_path = out_dir / "skipped.csv"
     with skip_path.open("w", encoding="utf-8-sig", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["doi", "reason"])
+        writer = csv.DictWriter(f, fieldnames=["doi", "reason", "title_zh"])
         writer.writeheader()
         writer.writerows(skipped)
 
+    editorial_n = sum(
+        1
+        for s in skipped
+        if str(s.get("reason") or "").startswith("editorial")
+        or s.get("reason") == "no_author_no_keyword"
+    )
     lengths = [d["text_length"] for d in docs]
     readme = out_dir / "README.md"
     readme.write_text(
@@ -267,7 +295,7 @@ def main() -> None:
                 f"- 来源: `{input_path.name}`",
                 f"- 输入行数: {len(rows)}",
                 f"- 输出文档: {len(docs)}（一篇论文 = 一个 chunk）",
-                f"- 跳过: {len(skipped)}",
+                f"- 跳过: {len(skipped)}（其中办刊/会议类 {editorial_n}）",
                 f"- 文本长度: min={min(lengths) if lengths else 0}, "
                 f"avg={round(sum(lengths)/len(lengths),1) if lengths else 0}, "
                 f"max={max(lengths) if lengths else 0}",
@@ -285,6 +313,7 @@ def main() -> None:
                 "",
                 "题名（中/英）→ 作者 → 单位 → 关键词 → 分类号 → 摘要 → 基金 → DOI",
                 "",
+                "已剔除办刊通告 / 评奖引证 / 会议新闻（见 `editorial_filter.py`）。",
                 "原始 `articles_metadata.csv` 未修改。",
                 "",
             ]
@@ -294,7 +323,7 @@ def main() -> None:
 
     print(f"输入: {len(rows)}")
     print(f"输出: {len(docs)} → {out_dir}")
-    print(f"跳过: {len(skipped)}")
+    print(f"跳过: {len(skipped)}（办刊/会议 {editorial_n}）")
     if lengths:
         print(f"text 长度: min={min(lengths)} avg={round(sum(lengths)/len(lengths),1)} max={max(lengths)}")
 

@@ -34,3 +34,5 @@ data/*.db-*
 /浙大学报（人文社科）/rag_cleaned/
 /浙大学报（人文社科）/articles_metadata.csv
 /浙大学报（人文社科）/*.xlsx
+
+/eval/*

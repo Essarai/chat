@@ -87,7 +87,11 @@ def _build_instruction(
         "yearly_growth",
         "hotspot_compare",
         "top_institutions",
+        "top_authors",
+        "institution_authors",
         "topic_coverage",
+        "submission_fit",
+        "topic_evolution",
         "author_profile",
         "top_directions_with_papers",
     }:
@@ -96,7 +100,11 @@ def _build_instruction(
             "yearly_growth",
             "hotspot_compare",
             "top_institutions",
+            "top_authors",
+            "institution_authors",
             "topic_coverage",
+            "submission_fit",
+            "topic_evolution",
             "author_profile",
             "top_directions_with_papers",
         }:
@@ -105,6 +113,11 @@ def _build_instruction(
             extra += (
                 "研究方向=证据中的热门关键词/directions，按发文量归纳学科主题；"
                 "严禁把在线优先出版、影响因子、CSSCI排名、获奖、办刊通告当作研究方向。"
+            )
+        if task == "institution_authors":
+            extra += (
+                "成果=该机构署名作者在本刊的论文；"
+                "严禁把校史、纪念、写该大学的文章当作作者代表成果。"
             )
         return (
             f"本题任务={task}。{insight}{extra}{analysis_hint}"
@@ -506,32 +519,46 @@ def try_keyword_authors_template_answer(state: JournalState) -> Optional[str]:
         return None
     total_a = sql.get("total_authors") or len(authors)
     total_p = sql.get("total_papers") or 0
+    y0, y1 = sql.get("start_year"), sql.get("end_year")
+    top_n = sql.get("top_n") or sql.get("author_limit") or len(authors)
+    year_bit = ""
+    if y0 or y1:
+        year_bit = f"；区间 {y0 or '不限'}–{y1 or '不限'}"
     lines = [
-        f"## 关键词含「{kw}」的作者",
+        f"## 主题「{kw}」相关发文 Top{min(top_n, len(authors) or top_n)} 作者",
         "",
-        f"共检索到 **{total_a}** 位作者、**{total_p}** 篇相关论文"
-        + (f"；下列按相关发文量展示前 {len(authors)} 位。" if total_a > len(authors) else "。"),
+        f"共检索到 **{total_a}** 位作者、**{total_p}** 篇相关论文{year_bit}"
+        + (
+            f"；下列按相关发文量展示前 {len(authors)} 位。"
+            if total_a > len(authors)
+            else "。"
+        ),
         "",
     ]
     if not authors:
         lines.append("未找到匹配作者。")
         return "\n".join(lines)
+    show_papers = len(authors) <= 12
     for i, a in enumerate(authors, 1):
         name = (a.get("name_zh") or a.get("name_en") or a.get("author_id") or "").strip()
         lines.append(f"{i}. **{name}**（{a.get('paper_count')}篇）")
-        for p in a.get("papers") or []:
-            title = (p.get("title_zh") or "（无题名）").strip()
-            year = p.get("year")
-            doi = (p.get("doi") or "").strip()
-            url = doi_url(doi) or ""
-            year_bit = f"（{year}）" if year else ""
-            bits = [f"   - **{title}**{year_bit}"]
-            if doi:
-                bits.append(f"DOI: {doi}")
-            if url:
-                bits.append(f"[查看全文]({url})")
-            lines.append(" ".join(bits))
+        if show_papers:
+            for p in a.get("papers") or []:
+                title = (p.get("title_zh") or "（无题名）").strip()
+                year = p.get("year")
+                doi = (p.get("doi") or "").strip()
+                url = doi_url(doi) or ""
+                yb = f"（{year}）" if year else ""
+                bits = [f"   - **{title}**{yb}"]
+                if doi:
+                    bits.append(f"DOI: {doi}")
+                if url:
+                    bits.append(f"[查看全文]({url})")
+                lines.append(" ".join(bits))
+            lines.append("")
+    if not show_papers:
         lines.append("")
+    lines.append("> 统计口径：论文关键词字段匹配该主题；非全库无主题过滤的高产作者榜。")
     return _ensure_ordered_list_markdown("\n".join(lines))
 
 
@@ -631,6 +658,123 @@ def try_top_institutions_template(state: JournalState) -> Optional[str]:
     return _ensure_ordered_list_markdown("\n".join(lines))
 
 
+def try_top_authors_template(state: JournalState) -> Optional[str]:
+    sql = state.get("sql_evidence") or {}
+    if sql.get("scope") != "top_authors" and sql.get("task") != "top_authors":
+        return None
+    authors = sql.get("authors") or []
+    if not authors:
+        return None
+    top_n = sql.get("top_n") or len(authors)
+    y0, y1 = sql.get("start_year"), sql.get("end_year")
+    lines = [
+        f"## 发文量 Top{top_n} 作者",
+        "",
+        f"统计区间：{y0 or '不限'}–{y1 or '不限'}（按作者署名论文去重计数）",
+        "",
+    ]
+    for i, a in enumerate(authors[:top_n], 1):
+        name = (a.get("name_zh") or a.get("name") or "").strip() or "（无名）"
+        lines.append(f"{i}. **{name}**（{a.get('paper_count')}篇）")
+    lines.append("")
+    lines.append("> 以上来自本刊结构化发文统计。")
+    return _ensure_ordered_list_markdown("\n".join(lines))
+
+
+def try_institution_authors_template(state: JournalState) -> Optional[str]:
+    sql = state.get("sql_evidence") or {}
+    if (
+        sql.get("scope") != "institution_authors"
+        and sql.get("task") != "institution_authors"
+    ):
+        return None
+    authors = sql.get("authors") or []
+    inst = sql.get("institution") or "该机构"
+    if not authors:
+        return (
+            f"## {inst} 相关作者代表成果\n\n"
+            f"未检索到署名单位含「{inst}」的作者发文记录。"
+        )
+    y0, y1 = sql.get("start_year"), sql.get("end_year")
+    lines = [
+        f"## {inst} 相关作者代表成果",
+        "",
+        f"- **匹配作者数：** {sql.get('total_authors') or len(authors)}",
+        f"- **机构关联发文：** {sql.get('total_papers') or 0} 篇",
+        f"- **区间：** {y0 or '不限'}–{y1 or '不限'}",
+        "",
+        "以下按该机构署名作者在本刊发文量排序，并列出其代表论文"
+        "（单位字段含该机构，非「以该机构为主题」的文章）。",
+        "",
+    ]
+    for i, a in enumerate(authors, 1):
+        name = (a.get("name_zh") or "").strip() or "（无名）"
+        lines.append(f"### {i}. {name}（{a.get('paper_count')}篇）")
+        lines.append("")
+        papers = a.get("papers") or []
+        if not papers:
+            lines.append("- （暂无论文样例）")
+        else:
+            for j, p in enumerate(papers, 1):
+                title = (p.get("title_zh") or p.get("title") or "（无题名）").strip()
+                year = p.get("year")
+                doi = (p.get("doi") or "").strip()
+                url = doi_url(doi) or ""
+                year_bit = f"（{year}）" if year else ""
+                bits = [f"{j}. **{title}**{year_bit}"]
+                if doi:
+                    bits.append(f"DOI: {doi}")
+                if url:
+                    bits.append(f"[查看全文]({url})")
+                lines.append(" ".join(bits))
+        lines.append("")
+    lines.append(
+        "> 统计口径：作者在该篇论文上的机构署名含目标机构；"
+        "勿与校史、纪念、会议报道类文献混淆。"
+    )
+    return _ensure_ordered_list_markdown("\n".join(lines))
+
+
+def try_topic_evolution_template(state: JournalState) -> Optional[str]:
+    sql = state.get("sql_evidence") or {}
+    plan = state.get("query_plan") or {}
+    if plan.get("task") != "topic_evolution" and sql.get("task") != "topic_evolution":
+        return None
+    topic = sql.get("topic_keywords") or []
+    yearly_by = sql.get("yearly_by_keyword") or {}
+    queried = plan.get("keywords") or [
+        r.get("keyword") for r in topic if r.get("keyword")
+    ]
+    lines = [
+        "## 专题发展与命中统计",
+        "",
+        f"查询主题：{'、'.join(str(k) for k in queried if k) or '（无）'}",
+        f"区间：{sql.get('start_year') or '不限'}–{sql.get('end_year') or '不限'}",
+        "",
+    ]
+    if not topic or all(int(r.get("paper_count") or 0) == 0 for r in topic):
+        lines += [
+            "本刊结构化关键词中，上述主题命中很少或为 0；以下不使用全刊发文趋势冒充。",
+            "",
+        ]
+        return _ensure_ordered_list_markdown("\n".join(lines))
+    lines += ["### 主题词命中", ""]
+    for i, r in enumerate(topic, 1):
+        lines.append(f"{i}. **{r.get('keyword')}**（{r.get('paper_count')}篇）")
+    lines.append("")
+    if yearly_by:
+        lines += ["### 逐年命中", ""]
+        for term, series in yearly_by.items():
+            if not series:
+                continue
+            bits = "、".join(
+                f"{r.get('year')}:{r.get('paper_count')}" for r in series[-12:]
+            )
+            lines.append(f"- **{term}**：{bits}")
+        lines.append("")
+    return _ensure_ordered_list_markdown("\n".join(lines))
+
+
 def try_topic_coverage_template(state: JournalState) -> Optional[str]:
     sql = state.get("sql_evidence") or {}
     if sql.get("scope") != "topic_coverage" and sql.get("task") != "topic_coverage":
@@ -680,6 +824,157 @@ def try_topic_coverage_template(state: JournalState) -> Optional[str]:
             if url:
                 bits.append(f"[查看全文]({url})")
             lines.append(" ".join(bits))
+    return _ensure_ordered_list_markdown("\n".join(lines))
+
+
+def try_submission_fit_template(state: JournalState) -> Optional[str]:
+    sql = state.get("sql_evidence") or {}
+    plan = state.get("query_plan") or {}
+    if sql.get("scope") != "submission_fit" and sql.get("task") != "submission_fit":
+        if plan.get("task") != "submission_fit":
+            return None
+        if sql.get("scope") not in {"submission_fit", "topic_coverage"}:
+            return None
+    topic = sql.get("topic_keywords") or []
+    papers = sql.get("sample_papers") or sql.get("papers") or []
+    generic_papers = sql.get("generic_only_papers") or []
+    total = int(sql.get("total_hits") or 0)
+    queried = sql.get("keywords_queried") or plan.get("keywords") or []
+    phrase = plan.get("topic_phrase") or ""
+    fit = (sql.get("fit_label") or "weak").strip().lower()
+    cov = sql.get("coverage_summary") or {}
+    rising = bool(cov.get("rising_recently"))
+    score_basis = (cov.get("score_basis") or "").strip()
+    specific_hits = int(cov.get("specific_hits") or 0)
+    generic_hits = int(cov.get("generic_hits") or 0)
+    effective = cov.get("effective_hits")
+    label_zh = {"strong": "较强", "moderate": "中等", "weak": "偏弱"}.get(fit, fit)
+    lines = [
+        "## 投稿适配评估",
+        "",
+    ]
+    if phrase:
+        lines.append(f"论文主题：{phrase}")
+    lines += [
+        f"查询关键词：{'、'.join(str(k) for k in queried) or '（无）'}",
+        f"区间：{sql.get('start_year') or '不限'}–{sql.get('end_year') or '不限'}",
+        "",
+        "### 覆盖结论",
+        "",
+        f"- 适合度标签：**{label_zh}**（`{fit}`）",
+        f"- 关键词命中篇数（按词累加，可重叠）：**{total}**",
+    ]
+    if score_basis == "domain_facet" or score_basis == "generic_only":
+        lines.append(
+            f"- 主题专指面命中：**{specific_hits}**；宽泛技术词命中：**{generic_hits}**"
+            + (
+                f"；有效计分命中：**{effective}**"
+                if effective is not None and score_basis == "domain_facet"
+                else ""
+            )
+        )
+    lines += [
+        f"- 近年是否上升：{'是' if rising else '否/不明显'}",
+        "",
+    ]
+    if fit == "strong":
+        lines += [
+            f"**判断：** 本刊对「{phrase or '、'.join(map(str, queried)) or '该主题'}」"
+            "相关关键词有较稳定命中，**可作为投稿参考**；仍需核对栏目与学科匹配度。",
+            "",
+            "注意：命中≠录用。请勿把相邻技术（如仅信息化/遥感综述）直接等同于你的主题已充分覆盖。",
+            "",
+        ]
+    elif fit == "moderate":
+        lines += [
+            f"**判断：** 本刊有一定相关基础，**可作参考投稿，但匹配度一般**；"
+            "建议对照下列代表论文，确认问题意识与方法是否同频。",
+            "",
+        ]
+    elif score_basis == "generic_only":
+        lines += [
+            f"**判断：不建议以「{phrase or '、'.join(map(str, queried)) or '该主题'}」"
+            "作为向本刊投稿的主方向。**",
+            "",
+            "依据：主题含农业/病虫害等专指面，但本刊这些关键词命中为 0；"
+            f"「人工智能」等宽泛技术词虽有 {generic_hits} 篇命中，"
+            "多为治理、教育、法律等人文社科语境，**不能**等同于「AI+农业病虫害」已覆盖。",
+            "",
+            "可选下一步：改投农业与生命科学/植保/农业信息类期刊；"
+            "或若坚持本刊，需将问题意识改写为人文社科可对接的议题（并仍可能不被录用）。",
+            "",
+        ]
+    else:
+        lines += [
+            f"**判断：不建议以「{phrase or '、'.join(map(str, queried)) or '该主题'}」"
+            "作为向本刊投稿的主方向。**",
+            "",
+            "依据：结构化关键词命中偏少或为 0。以下不会用证据外旧文、办刊通告，"
+            "或仅因“期刊对新技术开放”来论证适合投稿。",
+            "",
+            "可选下一步：检索相邻主题（如植保、遥感监测、智能农业）看是否有可改写的契合点；"
+            "或改投更对口的农业信息/植保类期刊。",
+            "",
+        ]
+    if topic and any(int(r.get("paper_count") or 0) > 0 for r in topic):
+        lines += ["### 证据热词 / 篇数", ""]
+        for i, r in enumerate(topic, 1):
+            lines.append(f"{i}. **{r.get('keyword')}**（{r.get('paper_count')}篇）")
+        lines.append("")
+    if papers:
+        lines += ["### 本刊相关论文（仅证据内，可作参考）", ""]
+        for i, p in enumerate(papers[:10], 1):
+            title = (p.get("title_zh") or p.get("title") or "（无题名）").strip()
+            year = p.get("year")
+            doi = (p.get("doi") or "").strip()
+            url = doi_url(doi) or ""
+            year_bit = f"（{year}）" if year else ""
+            bits = [f"{i}. **{title}**{year_bit}"]
+            if doi:
+                bits.append(f"DOI: {doi}")
+            if url:
+                bits.append(f"[查看全文]({url})")
+            lines.append(" ".join(bits))
+        lines.append("")
+    elif generic_papers and score_basis == "generic_only":
+        lines += [
+            "### 仅匹配宽泛技术词的论文（不计为主题适配证据）",
+            "",
+            "下列论文只命中「人工智能」等通用词，学科语境与「农业病虫害」不对口：",
+            "",
+        ]
+        for i, p in enumerate(generic_papers[:6], 1):
+            title = (p.get("title_zh") or p.get("title") or "（无题名）").strip()
+            year = p.get("year")
+            doi = (p.get("doi") or "").strip()
+            year_bit = f"（{year}）" if year else ""
+            lines.append(
+                f"{i}. **{title}**{year_bit}" + (f" DOI: {doi}" if doi else "")
+            )
+        lines.append("")
+    # Do not surface weak RAG hits as “适合投稿”论据；only optional adjacent clues
+    rag = state.get("rag_evidence") or {}
+    rag_hits = rag.get("hits") or []
+    if fit == "weak" and rag_hits:
+        lines += [
+            "### 相邻语义线索（不计入适合度）",
+            "",
+            "以下来自语义检索，**不能**单独证明适合投稿；名单仍以 SQL 关键词为准：",
+            "",
+        ]
+        for i, h in enumerate(rag_hits[:3], 1):
+            meta = h.get("metadata") or h
+            title = (meta.get("title_zh") or meta.get("title") or "（无题名）").strip()
+            doi = (meta.get("doi") or "").strip()
+            lines.append(f"{i}. **{title}**" + (f" DOI: {doi}" if doi else ""))
+        lines.append("")
+    lines += [
+        "### 投稿注意",
+        "",
+        "- 结论仅基于本库关键词与代表论文，不代表审稿或录用承诺。",
+        "- 禁止引用证据外 DOI；禁止用校史/办刊通告/影响因子类文献充当研究覆盖。",
+        "- 复合主题按「专指面」计分：仅宽泛技术词命中不会抬高适合度。",
+    ]
     return _ensure_ordered_list_markdown("\n".join(lines))
 
 
@@ -753,6 +1048,17 @@ def try_yearly_growth_template(state: JournalState) -> Optional[str]:
                 "- 同比下降年份：" + "、".join(str(r.get("year")) for r in shown)
             )
     lines.append(incomplete_note)
+    kws = sql.get("keywords") or []
+    if kws:
+        lines += ["", "### 热门关键词（学科主题）", ""]
+        for i, r in enumerate(kws[:15], 1):
+            lines.append(
+                f"{i}. **{r.get('keyword')}**（{r.get('paper_count')}篇）"
+            )
+        lines.append("")
+        lines.append(
+            "> 以上关键词来自论文标注字段的频次统计，不含办刊通告/获奖类非研究文献。"
+        )
     return "\n".join(lines).strip()
 
 
@@ -857,6 +1163,18 @@ def try_author_template_answer(state: JournalState) -> Optional[str]:
     inst = try_top_institutions_template(state)
     if inst:
         return inst
+    top_a = try_top_authors_template(state)
+    if top_a:
+        return top_a
+    inst_authors = try_institution_authors_template(state)
+    if inst_authors:
+        return inst_authors
+    submission = try_submission_fit_template(state)
+    if submission:
+        return submission
+    topic_evo = try_topic_evolution_template(state)
+    if topic_evo:
+        return topic_evo
     coverage = try_topic_coverage_template(state)
     if coverage:
         return coverage

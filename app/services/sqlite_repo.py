@@ -265,6 +265,8 @@ class SQLiteRepo:
         keyword: str,
         author_limit: int = 30,
         papers_per_author: int = 8,
+        start_year: Optional[int] = None,
+        end_year: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Authors whose papers carry a keyword containing `keyword`."""
         kw = (keyword or "").strip().strip("“”\"'‘’")
@@ -274,12 +276,24 @@ class SQLiteRepo:
                 "keyword": keyword,
                 "authors": [],
                 "source": "sqlite",
+                "start_year": start_year,
+                "end_year": end_year,
             }
         like = f"%{kw}%"
+        year_clauses: List[str] = []
+        year_params: List[Any] = []
+        if start_year is not None:
+            year_clauses.append("p.year >= ?")
+            year_params.append(start_year)
+        if end_year is not None:
+            year_clauses.append("p.year <= ?")
+            year_params.append(end_year)
+        year_sql = (" AND " + " AND ".join(year_clauses)) if year_clauses else ""
+
         with self._conn() as conn:
             authors = self._rows(
                 conn.execute(
-                    """
+                    f"""
                     SELECT a.author_id AS author_id,
                            a.name_zh AS name_zh,
                            a.name_en AS name_en,
@@ -287,42 +301,50 @@ class SQLiteRepo:
                     FROM paper_keywords pk
                     JOIN paper_authors pa ON pa.doi = pk.doi
                     JOIN authors a ON a.author_id = pa.author_id
+                    JOIN papers p ON p.doi = pa.doi
                     WHERE pk.label_zh LIKE ?
+                      {year_sql}
                     GROUP BY a.author_id
                     ORDER BY paper_count DESC, a.name_zh
                     LIMIT ?
                     """,
-                    (like, author_limit),
+                    (like, *year_params, author_limit),
                 )
             )
             total_authors = conn.execute(
-                """
+                f"""
                 SELECT COUNT(DISTINCT pa.author_id)
                 FROM paper_keywords pk
                 JOIN paper_authors pa ON pa.doi = pk.doi
+                JOIN papers p ON p.doi = pa.doi
                 WHERE pk.label_zh LIKE ?
+                  {year_sql}
                 """,
-                (like,),
+                (like, *year_params),
             ).fetchone()[0]
             total_papers = conn.execute(
-                """
+                f"""
                 SELECT COUNT(DISTINCT pk.doi)
                 FROM paper_keywords pk
+                JOIN papers p ON p.doi = pk.doi
                 WHERE pk.label_zh LIKE ?
+                  {year_sql}
                 """,
-                (like,),
+                (like, *year_params),
             ).fetchone()[0]
             matched_labels = self._rows(
                 conn.execute(
-                    """
+                    f"""
                     SELECT pk.label_zh AS keyword, COUNT(DISTINCT pk.doi) AS paper_count
                     FROM paper_keywords pk
+                    JOIN papers p ON p.doi = pk.doi
                     WHERE pk.label_zh LIKE ?
+                      {year_sql}
                     GROUP BY pk.label_zh
                     ORDER BY paper_count DESC
                     LIMIT 12
                     """,
-                    (like,),
+                    (like, *year_params),
                 )
             )
 
@@ -330,29 +352,34 @@ class SQLiteRepo:
             for a in authors:
                 papers = self._rows(
                     conn.execute(
-                        """
+                        f"""
                         SELECT DISTINCT p.doi AS doi, p.title_zh AS title_zh,
                                p.year AS year, pk.label_zh AS matched_keyword
                         FROM paper_authors pa
                         JOIN papers p ON p.doi = pa.doi
                         JOIN paper_keywords pk ON pk.doi = pa.doi
                         WHERE pa.author_id = ? AND pk.label_zh LIKE ?
+                          {year_sql}
                         ORDER BY p.year DESC, p.doi
                         LIMIT ?
                         """,
-                        (a["author_id"], like, papers_per_author),
+                        (a["author_id"], like, *year_params, papers_per_author),
                     )
                 )
                 result_authors.append({**a, "papers": papers})
 
         return {
             "scope": "keyword_authors",
+            "task": "keyword_authors",
             "keyword": kw,
             "matched_labels": matched_labels,
             "total_authors": int(total_authors or 0),
             "total_papers": int(total_papers or 0),
             "authors": result_authors,
             "author_limit": author_limit,
+            "top_n": author_limit,
+            "start_year": start_year,
+            "end_year": end_year,
             "source": "sqlite",
         }
 
@@ -791,6 +818,209 @@ class SQLiteRepo:
                 )
             out.append({**a, "keywords": kws})
         return out
+
+
+    @staticmethod
+    def _is_institution_meta_title(title: str, institution: str) -> bool:
+        """校史/办学纪念类题名：不宜作为「学科代表成果」样例。"""
+        t = title or ""
+        if not t:
+            return False
+        if re.search(
+            r"西迁|校史|办学时期|名刊工程|史地研究所|求是书院|"
+            r"临时校务|治校模式|导师群体|优秀师资",
+            t,
+        ):
+            return True
+        # 以本校人物/办学制度为对象的纪念、校史研究
+        if re.search(
+            r"(竺可桢|叶笃正|马寅初|蔡邦华|张其昀).{0,16}(浙江大学|浙大)|"
+            r"(浙江大学|浙大).{0,16}(竺可桢|叶笃正|马寅初|研究院的创立|师资|师生关系|"
+            r"研究生教育|导师制|优秀师资|办学|临时校务|治校)|"
+            r"(与|任|在)(浙江大学|浙大)",
+            t,
+        ):
+            return True
+        inst = (institution or "").strip()
+        short = "浙大" if inst == "浙江大学" else (
+            inst.replace("大学", "") if inst.endswith("大学") else inst
+        )
+        if short and len(short) >= 2 and re.search(
+            rf"{re.escape(short)}.{{0,12}}(西迁|史地|办学|导师|师资|治校)",
+            t,
+        ):
+            return True
+        return False
+
+    def institution_authors_with_papers(
+        self,
+        institution: str,
+        top_authors: int = 8,
+        papers_per_author: int = 3,
+        start_year: Optional[int] = None,
+        end_year: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Authors affiliated with an institution (name substring) + sample papers.
+
+        Affiliation is taken from author_institutions on the same paper — i.e.
+        papers *by* that institution's authors, not papers *about* the institution.
+        Prefer non-institutional-history titles as「代表成果」samples.
+        """
+        inst = (institution or "").strip()
+        if not inst:
+            return {
+                "scope": "institution_authors",
+                "institution": "",
+                "authors": [],
+                "papers": [],
+                "total_authors": 0,
+                "total_papers": 0,
+            }
+        like = f"%{inst}%"
+        year_clauses = []
+        year_params: List[Any] = []
+        if start_year is not None:
+            year_clauses.append("p.year >= ?")
+            year_params.append(start_year)
+        if end_year is not None:
+            year_clauses.append("p.year <= ?")
+            year_params.append(end_year)
+        year_sql = (" AND " + " AND ".join(year_clauses)) if year_clauses else ""
+        # Over-fetch authors so we can demote those who only write institutional history
+        fetch_authors = max(top_authors * 3, top_authors + 12)
+
+        with self._conn() as conn:
+            author_rows = self._rows(
+                conn.execute(
+                    f"""
+                    SELECT a.author_id AS author_id,
+                           a.name_zh AS name_zh,
+                           COUNT(DISTINCT pa.doi) AS paper_count
+                    FROM authors a
+                    JOIN paper_authors pa ON pa.author_id = a.author_id
+                    JOIN author_institutions ai
+                      ON ai.doi = pa.doi AND ai.author_id = a.author_id
+                    JOIN institutions i ON i.institution_id = ai.institution_id
+                    JOIN papers p ON p.doi = pa.doi
+                    WHERE i.name_norm LIKE ?
+                      AND a.name_zh IS NOT NULL AND a.name_zh <> ''
+                      {year_sql}
+                    GROUP BY a.author_id
+                    ORDER BY paper_count DESC, a.name_zh
+                    LIMIT ?
+                    """,
+                    [like, *year_params, fetch_authors],
+                )
+            )
+            total_authors = conn.execute(
+                f"""
+                SELECT COUNT(*) FROM (
+                    SELECT a.author_id
+                    FROM authors a
+                    JOIN paper_authors pa ON pa.author_id = a.author_id
+                    JOIN author_institutions ai
+                      ON ai.doi = pa.doi AND ai.author_id = a.author_id
+                    JOIN institutions i ON i.institution_id = ai.institution_id
+                    JOIN papers p ON p.doi = pa.doi
+                    WHERE i.name_norm LIKE ?
+                      AND a.name_zh IS NOT NULL AND a.name_zh <> ''
+                      {year_sql}
+                    GROUP BY a.author_id
+                )
+                """,
+                [like, *year_params],
+            ).fetchone()[0]
+            total_papers = conn.execute(
+                f"""
+                SELECT COUNT(DISTINCT ai.doi)
+                FROM author_institutions ai
+                JOIN institutions i ON i.institution_id = ai.institution_id
+                JOIN papers p ON p.doi = ai.doi
+                WHERE i.name_norm LIKE ? {year_sql}
+                """,
+                [like, *year_params],
+            ).fetchone()[0]
+
+            ranked: List[Dict[str, Any]] = []
+            for a in author_rows:
+                aid = a.get("author_id")
+                candidates = self._rows(
+                    conn.execute(
+                        f"""
+                        SELECT DISTINCT p.doi AS doi,
+                               p.title_zh AS title_zh,
+                               p.year AS year
+                        FROM paper_authors pa
+                        JOIN papers p ON p.doi = pa.doi
+                        JOIN author_institutions ai
+                          ON ai.doi = pa.doi AND ai.author_id = pa.author_id
+                        JOIN institutions i ON i.institution_id = ai.institution_id
+                        WHERE pa.author_id = ?
+                          AND i.name_norm LIKE ?
+                          {year_sql}
+                        ORDER BY p.year DESC, p.doi
+                        LIMIT ?
+                        """,
+                        [aid, like, *year_params, max(papers_per_author * 4, 12)],
+                    )
+                )
+                non_meta = [
+                    p
+                    for p in candidates
+                    if not self._is_institution_meta_title(
+                        str(p.get("title_zh") or ""), inst
+                    )
+                ]
+                meta = [
+                    p
+                    for p in candidates
+                    if self._is_institution_meta_title(
+                        str(p.get("title_zh") or ""), inst
+                    )
+                ]
+                papers = (non_meta + meta)[:papers_per_author]
+                # Prefer authors who have at least one non-meta paper for showcase
+                score = (
+                    1 if non_meta else 0,
+                    int(a.get("paper_count") or 0),
+                )
+                ranked.append({**a, "papers": papers, "_score": score})
+
+            ranked.sort(
+                key=lambda r: (-r["_score"][0], -r["_score"][1], r.get("name_zh") or "")
+            )
+            with_research = [r for r in ranked if r["_score"][0] == 1]
+            meta_only = [r for r in ranked if r["_score"][0] == 0]
+            selected = with_research[:top_authors]
+            if len(selected) < top_authors:
+                selected.extend(meta_only[: top_authors - len(selected)])
+
+            authors_out = []
+            flat_papers: List[Dict[str, Any]] = []
+            seen_doi: set[str] = set()
+            for a in selected:
+                a.pop("_score", None)
+                authors_out.append(a)
+                for p in a.get("papers") or []:
+                    doi = (p.get("doi") or "").lower()
+                    if doi and doi not in seen_doi:
+                        seen_doi.add(doi)
+                        flat_papers.append(p)
+
+        return {
+            "scope": "institution_authors",
+            "task": "institution_authors",
+            "institution": inst,
+            "authors": authors_out,
+            "papers": flat_papers,
+            "total_authors": int(total_authors or 0),
+            "total_papers": int(total_papers or 0),
+            "top_n_authors": top_authors,
+            "papers_per_author": papers_per_author,
+            "start_year": start_year,
+            "end_year": end_year,
+            "source": "sqlite",
+        }
 
 
 # Backward-compatible alias

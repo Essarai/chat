@@ -48,6 +48,18 @@ def _format_sql(data: Dict[str, Any]) -> str:
             "回答须列出主要年份数量，识别快速增长期与下降期，"
             "并明确指出增长最快的年份；若末年发文量异常偏低，提示可能为未完年。"
         )
+        if data.get("keywords"):
+            lines.append(
+                "热门关键词: "
+                + ", ".join(
+                    f"{r['keyword']}({r['paper_count']})"
+                    for r in (data.get("keywords") or [])[:15]
+                )
+            )
+            lines.append(
+                "若问题同时问热门关键词，须按上表学科主题词作答；"
+                "严禁用办刊通告、获奖、影响因子、引证报告充当趋势或热词。"
+            )
         return "\n".join(lines)
 
     if data.get("scope") == "unsupported" or task == "unsupported_citations":
@@ -69,13 +81,27 @@ def _format_sql(data: Dict[str, Any]) -> str:
         lines.append("请对比两窗热词异同，指出上升/回落主题；禁止编造未出现的关键词。")
         return "\n".join(lines)
 
-    if data.get("scope") == "topic_coverage" or task == "topic_coverage":
+    if data.get("scope") in {"topic_coverage", "submission_fit"} or task in {
+        "topic_coverage",
+        "submission_fit",
+    }:
         y0, y1 = data.get("start_year"), data.get("end_year")
+        label = "投稿适配" if (
+            data.get("scope") == "submission_fit" or task == "submission_fit"
+        ) else "专题关键词覆盖"
         lines = [
-            f"[SQL]【专题关键词覆盖】区间: {y0}-{y1}",
+            f"[SQL]【{label}】区间: {y0}-{y1}",
             "查询词: " + ", ".join(data.get("keywords_queried") or []),
             f"合计命中(按词频累加，可重叠): {data.get('total_hits')}",
         ]
+        if data.get("fit_label"):
+            lines.append(f"适合度标签: {data.get('fit_label')}")
+        cov = data.get("coverage_summary") or {}
+        if cov:
+            lines.append(
+                f"覆盖摘要: hits≈{cov.get('hit_papers_est')}, "
+                f"rising={cov.get('rising_recently')}"
+            )
         topic = data.get("topic_keywords") or []
         if not topic or all(int(r.get("paper_count") or 0) == 0 for r in topic):
             lines.append(
@@ -102,6 +128,35 @@ def _format_sql(data: Dict[str, Any]) -> str:
                 lines.append(
                     f"{i}. {p.get('title_zh') or p.get('title')}{year_bit}{doi_bit}{link}"
                 )
+        return "\n".join(lines)
+
+    if data.get("scope") == "top_authors" or task == "top_authors":
+        top_n = data.get("top_n") or len(data.get("authors") or [])
+        lines = [
+            f"[SQL]【高产作者】Top{top_n} 区间: "
+            f"{data.get('start_year')}-{data.get('end_year')}",
+        ]
+        for i, a in enumerate((data.get("authors") or [])[:top_n], 1):
+            lines.append(
+                f"{i}. {a.get('name_zh') or a.get('name')}（{a.get('paper_count')}篇）"
+            )
+        return "\n".join(lines)
+
+    if data.get("scope") == "institution_authors" or task == "institution_authors":
+        inst = data.get("institution") or ""
+        lines = [
+            f"[SQL]【机构作者代表成果】机构匹配: {inst}",
+            f"作者数={data.get('total_authors')} 关联发文={data.get('total_papers')}",
+            "口径=作者署名单位含该机构的论文，不是以该机构为研究对象的文献。",
+        ]
+        for i, a in enumerate((data.get("authors") or [])[:10], 1):
+            papers = a.get("papers") or []
+            titles = "；".join(
+                (p.get("title_zh") or "")[:40] for p in papers[:3]
+            )
+            lines.append(
+                f"{i}. {a.get('name_zh')}（{a.get('paper_count')}篇）: {titles}"
+            )
         return "\n".join(lines)
 
     if data.get("scope") == "top_institutions" or task == "top_institutions":

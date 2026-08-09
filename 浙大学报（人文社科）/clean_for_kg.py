@@ -11,6 +11,8 @@ import xml.etree.ElementTree as ET
 from collections import defaultdict
 from pathlib import Path
 
+from editorial_filter import is_editorial_record
+
 XML_LANG = "{http://www.w3.org/XML/1998/namespace}lang"
 
 # 资助机构归一：按优先级匹配（人文社科常见项靠前）
@@ -776,11 +778,37 @@ def main() -> None:
     xml_files = sorted(p for p in xml_dir.glob("*.xml") if is_article_file(p))
     articles = []
     errors = 0
+    editorial_skipped: list[dict] = []
+    seen_doi: dict[str, str] = {}
+    doi_collision = 0
     for i, path in enumerate(xml_files, 1):
         art = parse_article(path)
         if art is None:
             errors += 1
             continue
+        skip, reason = is_editorial_record(art)
+        if skip:
+            editorial_skipped.append(
+                {
+                    "doi": art.get("doi") or "",
+                    "title_zh": art.get("title_zh") or "",
+                    "year": (art.get("pub_date") or "")[:4],
+                    "reason": reason,
+                    "source_xml": art.get("source_xml") or path.name,
+                }
+            )
+            continue
+        doi = clean_space(art.get("doi") or "")
+        if doi and doi in seen_doi:
+            # 源数据偶发 DOI 撞车（不同 XML）；保留两篇，给后者加稳定后缀
+            stem = Path(art.get("source_xml") or path.name).stem
+            new_doi = f"{doi}__{stem}"
+            art["doi"] = new_doi
+            doi_collision += 1
+            print(f"WARN DOI 冲突，改写: {doi} → {new_doi}")
+            doi = new_doi
+        if doi:
+            seen_doi[doi] = art.get("source_xml") or path.name
         articles.append(art)
         if i % 500 == 0:
             print(f"已解析 {i}/{len(xml_files)} …")
@@ -788,6 +816,12 @@ def main() -> None:
     tables = build_tables(articles)
     for name, fields in SCHEMAS.items():
         write_csv(out_dir / f"{name}.csv", fields, tables[name])
+
+    write_csv(
+        out_dir / "skipped_editorial.csv",
+        ["doi", "title_zh", "year", "reason", "source_xml"],
+        editorial_skipped,
+    )
 
     # 清洗报告
     report = out_dir / "README_cleaning.md"
@@ -799,7 +833,8 @@ def main() -> None:
                 f"- 输入目录: `{xml_dir}`",
                 f"- 单篇 XML: {len(xml_files)}",
                 f"- 成功解析论文: {len(articles)}",
-                f"- 跳过/失败: {errors}",
+                f"- 解析失败: {errors}",
+                f"- 剔除办刊/会议非研究文献: {len(editorial_skipped)}",
                 "",
                 "## 输出表",
                 "",
@@ -809,6 +844,7 @@ def main() -> None:
                     f"| `{name}.csv` | {len(tables[name])} | KG 节点/边 |"
                     for name in SCHEMAS
                 ],
+                f"| `skipped_editorial.csv` | {len(editorial_skipped)} | 办刊通告等剔除清单 |",
                 "",
                 "## 清洗动作",
                 "",
@@ -818,6 +854,7 @@ def main() -> None:
                 "4. 基金映射到 agency_norm（国自然/省自然/重点研发等）",
                 "5. 关键词去空白 + 少量同义归并；中英按位置对齐",
                 "6. CLC、资助号拆成边表",
+                "7. 剔除办刊通告 / 评奖引证 / 会议新闻（题名规则 + 无作者且无关键词）",
                 "",
                 "原始 `articles_metadata.csv` 未改动。",
                 "",
@@ -827,6 +864,9 @@ def main() -> None:
     )
 
     print(f"论文: {len(articles)}")
+    print(f"剔除办刊/会议: {len(editorial_skipped)}")
+    if doi_collision:
+        print(f"DOI 冲突改写: {doi_collision}")
     print(f"作者: {len(tables['authors'])}")
     print(f"单位: {len(tables['institutions'])}")
     print(f"关键词: {len(tables['keywords'])}")

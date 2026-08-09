@@ -88,11 +88,17 @@ def collect_allowed_papers(state: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
         "unsupported_citations",
         "hotspot_compare",
         "top_institutions",
+        "top_authors",
+        "institution_authors",
         "yearly_growth",
         "topic_coverage",
+        "submission_fit",
+        "topic_evolution",
         "author_profile",
         "coauthored_papers",
         "keyword_authors",
+        "journal_overview",
+        "top_teams",
     }
     author_scoped = task in {"author_profile", "author"} or sql.get("scope") == "author"
     exclude_rag = (

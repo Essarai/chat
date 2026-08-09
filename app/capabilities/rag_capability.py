@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.capabilities.schemas import CapabilityResult, err_result, ok_result
@@ -8,6 +9,19 @@ from app.services.chroma_store import ChromaStore
 from app.utils import doi_url
 
 _CHROMA_CACHE: Dict[str, ChromaStore] = {}
+
+# 办刊通告 / 评奖 / 引证报告等非研究文献，易污染「趋势/方向」类语义检索
+_EDITORIAL_TITLE_RE = re.compile(
+    r"(本刊.*(奖|蝉联|入围|位居|排名)|"
+    r"中国科技论文在线优秀期刊|"
+    r"中国科技期刊引证报告|"
+    r"世界学术期刊学术影响力|"
+    r"WAJCI|影响因子|"
+    r"在线优先出版|"
+    r"编委会|征稿启事|更正声明|"
+    r"优秀期刊.*一等奖)",
+    re.I,
+)
 
 
 def _store(journal_id: Optional[str] = None) -> ChromaStore:
@@ -90,6 +104,25 @@ def _filter_hits_by_year(
     return kept, dropped
 
 
+def _is_editorial_noise(hit: Dict[str, Any]) -> bool:
+    title = str(hit.get("title") or hit.get("title_zh") or "")
+    text = str(hit.get("document") or hit.get("text") or hit.get("snippet") or "")
+    return bool(_EDITORIAL_TITLE_RE.search(title) or _EDITORIAL_TITLE_RE.search(text[:400]))
+
+
+def _filter_editorial_hits(
+    hits: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], int]:
+    kept: List[Dict[str, Any]] = []
+    dropped = 0
+    for h in hits or []:
+        if _is_editorial_noise(h):
+            dropped += 1
+            continue
+        kept.append(h)
+    return kept, dropped
+
+
 def _merge_hits(hit_lists: List[List[Dict[str, Any]]], top_k: int) -> List[Dict[str, Any]]:
     seen = set()
     merged: List[Dict[str, Any]] = []
@@ -153,6 +186,12 @@ def semantic_search(
             hits = store.search(question, top_k=fetch_k, where=None)
 
     hits, dropped = _filter_hits_by_year(hits, year_start, year_end)
+    before_editorial = list(hits)
+    hits, editorial_dropped = _filter_editorial_hits(hits)
+    # If over-filtered to empty, keep year-filtered set (rare edge).
+    if not hits and editorial_dropped:
+        hits = before_editorial
+        editorial_dropped = 0
     hits = hits[:k]
     return {
         "hits": hits,
@@ -163,6 +202,7 @@ def semantic_search(
         "year_end": year_end,
         "year_filtered": bool(where),
         "dropped_out_of_window": dropped,
+        "dropped_editorial": editorial_dropped,
         "where_error": where_error,
     }
 

@@ -36,7 +36,18 @@ def _evidence_enough(source: str, data: Dict[str, Any]) -> bool:
         if data.get("scope") in {
             "hotspot_compare",
             "topic_coverage",
+            "submission_fit",
             "top_institutions",
+            "top_authors",
+            "topic_stats",
+            "top_teams",
+        }:
+            return True
+        if data.get("task") in {
+            "topic_evolution",
+            "journal_overview",
+            "top_directions_with_papers",
+            "top_teams",
         }:
             return True
         if data.get("yearly") or data.get("yoy") or data.get("authors"):
@@ -124,6 +135,7 @@ def simple_exec_node(state: JournalState) -> Dict[str, Any]:
             "summary": _summarize(source, data if isinstance(data, dict) else {}),
         }
     )
+
     enough = _evidence_enough(source, data if isinstance(data, dict) else {})
     if not enough:
         route["escalated"] = True

@@ -15,6 +15,9 @@ class JournalState(TypedDict, total=False):
     # extract
     entities: Dict[str, Any]
 
+    # query understanding (Intent Schema)
+    intent: Dict[str, Any]
+
     # router
     route: Dict[str, Any]
     intents: List[str]

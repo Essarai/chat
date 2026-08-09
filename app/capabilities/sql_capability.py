@@ -4,6 +4,10 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from app.agents.intent_schema import (
+    _GENERIC_TECH_KEYWORDS,
+    score_submission_fit_from_keyword_rows,
+)
 from app.agents.understand import (
     _looks_like_person_name,
     extract_author_name,
@@ -37,13 +41,54 @@ def _db(journal_id: Optional[str] = None) -> SQLiteRepo:
         _DB_CACHE[jid] = repo
     return repo
 
+_TOPIC_STOP = {
+    "发文",
+    "发文量",
+    "论文",
+    "作者",
+    "研究",
+    "相关",
+    "前十",
+    "有哪些",
+    "哪些",
+    "近五",
+    "近5",
+}
+
+
 def _pick_keyword(question: str, entities: Dict[str, Any]) -> Optional[str]:
     for k in entities.get("keywords") or []:
         s = str(k).strip().strip("“”\"'‘’")
-        if s and len(s) <= 20:
+        # reject polluted extracts like「近5年 过水稻发文量前十的 有」
+        if s and 1 <= len(s) <= 12 and " " not in s and s not in _TOPIC_STOP:
             return s
-    m = re.search(r"[“\"‘']([^”\"’']+)[”\"’']", question or "")
-    return m.group(1).strip() if m else None
+    q = question or ""
+    for pat in (
+        r"研究过\s*([\u4e00-\u9fffA-Za-z0-9]{1,8}?)(?=发文|论文|作者|的|相关|研究|前|有)",
+        r"关于\s*([\u4e00-\u9fffA-Za-z0-9]{1,8}?)(?=的|发文|论文|作者|相关|研究)",
+        r"(?:主题|专题|关键词|主题词)[为是「\"'：:\s]*([\u4e00-\u9fffA-Za-z0-9]{1,12})",
+        r"[“\"‘']([^”\"’']{1,12})[”\"’']",
+    ):
+        m = re.search(pat, q)
+        if m:
+            s = m.group(1).strip()
+            if s and s not in _TOPIC_STOP:
+                return s
+    # common short domain tokens appearing in the question
+    for term in (
+        "水稻",
+        "番茄",
+        "镉",
+        "玉米",
+        "小麦",
+        "大豆",
+        "人工智能",
+        "共同富裕",
+        "数字经济",
+    ):
+        if term in q:
+            return term
+    return None
 
 
 def yoy_growth(yearly: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -103,6 +148,22 @@ def _period_triples(y0: int, y1: int) -> List[tuple]:
     return periods
 
 
+_CN_TOP_N = {
+    "两": 2,
+    "二": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+    "十": 10,
+    "十五": 15,
+    "二十": 20,
+}
+
+
 def _parse_top_n(plan: Dict[str, Any], question: str, default: int = 10) -> int:
     if plan.get("top_n") is not None:
         try:
@@ -112,6 +173,9 @@ def _parse_top_n(plan: Dict[str, Any], question: str, default: int = 10) -> int:
     m = re.search(r"前\s*(\d{1,2})", question or "")
     if m:
         return max(1, min(int(m.group(1)), 50))
+    m = re.search(r"前\s*(两|二|三|四|五|六|七|八|九|十|十五|二十)", question or "")
+    if m and m.group(1) in _CN_TOP_N:
+        return _CN_TOP_N[m.group(1)]
     return default
 
 
@@ -214,26 +278,96 @@ def execute_plan(
             "source": "sqlite",
         }
 
-    if "topic_coverage" in ops or task == "topic_coverage":
+    if (
+        "topic_coverage" in ops
+        or task == "topic_coverage"
+        or "submission_fit" in ops
+        or task == "submission_fit"
+    ):
         if not kws:
             kws = ["基因编辑", "CRISPR", "基因组编辑"]
         stats = db.topic_keyword_stats(kws, y0, y1)
+        topic_rows = stats.get("topic_keywords") or []
+        fit_meta = score_submission_fit_from_keyword_rows(topic_rows)
+        fit_label = fit_meta["fit_label"]
+        total = int(fit_meta["total_hits"])
+
+        # Prefer domain-keyword papers for samples; if domain facet is empty,
+        # keep generic-tech papers only as adjacent clues (not as fit evidence).
+        specific_kws = [str(k) for k in kws if str(k) not in _GENERIC_TECH_KEYWORDS]
+        generic_kws = [str(k) for k in kws if str(k) in _GENERIC_TECH_KEYWORDS]
         papers: List[Dict[str, Any]] = []
-        seen = set()
-        for kw in kws:
-            for p in db.papers_by_keyword(str(kw), limit=8, start_year=y0, end_year=y1):
-                doi = (p.get("doi") or "").lower()
-                if doi and doi not in seen:
-                    seen.add(doi)
-                    papers.append(p)
-        total = sum(int(r.get("paper_count") or 0) for r in (stats.get("topic_keywords") or []))
+        generic_papers: List[Dict[str, Any]] = []
+        seen: set = set()
+
+        def _collect(keys: List[str], bucket: List[Dict[str, Any]], lim: int = 8) -> None:
+            for kw in keys:
+                for p in db.papers_by_keyword(
+                    str(kw), limit=lim, start_year=y0, end_year=y1
+                ):
+                    doi = (p.get("doi") or "").lower()
+                    if doi and doi not in seen:
+                        seen.add(doi)
+                        bucket.append(p)
+
+        if specific_kws:
+            _collect(specific_kws, papers)
+        if not papers and generic_kws:
+            _collect(generic_kws, generic_papers)
+        elif generic_kws and fit_meta.get("score_basis") != "generic_only":
+            _collect(generic_kws, papers, lim=3)
+
+        # Rising: for domain-gated topics, use domain keywords only
+        rising = False
+        yearly_by = stats.get("yearly_by_keyword") or {}
+        year_totals: Dict[int, int] = {}
+        rise_keys = (
+            specific_kws
+            if fit_meta.get("has_specific_slot")
+            else [str(k) for k in kws]
+        )
+        for kw in rise_keys:
+            for row in yearly_by.get(str(kw)) or []:
+                try:
+                    y = int(row.get("year"))
+                    year_totals[y] = year_totals.get(y, 0) + int(
+                        row.get("paper_count") or 0
+                    )
+                except (TypeError, ValueError):
+                    continue
+        if year_totals:
+            years_sorted = sorted(year_totals)
+            mid = years_sorted[len(years_sorted) // 2]
+            early = sum(c for y, c in year_totals.items() if y < mid)
+            late = sum(c for y, c in year_totals.items() if y >= mid)
+            rising = late > early
+
+        is_fit = task == "submission_fit" or "submission_fit" in ops
+        scope = "submission_fit" if is_fit else "topic_coverage"
+        out_task = "submission_fit" if is_fit else "topic_coverage"
+        sample = papers[:8] if papers else []
         return {
             **stats,
-            "scope": "topic_coverage",
-            "task": "topic_coverage",
-            "papers": papers,
+            "scope": scope,
+            "task": out_task,
+            "papers": sample,
+            "sample_papers": sample,
+            "generic_only_papers": generic_papers[:8],
             "total_hits": total,
+            "effective_hits": fit_meta.get("effective_hits"),
             "keywords_queried": kws,
+            "coverage_summary": {
+                "hit_papers_est": total,
+                "effective_hits": fit_meta.get("effective_hits"),
+                "rising_recently": rising,
+                "score_basis": fit_meta.get("score_basis"),
+                "generic_hits": fit_meta.get("generic_hits"),
+                "specific_hits": fit_meta.get("specific_hits"),
+                "keyword_count": len(
+                    [r for r in topic_rows if int(r.get("paper_count") or 0) > 0]
+                ),
+            },
+            "fit_label": fit_label,
             "start_year": y0,
             "end_year": y1,
             "source": "sqlite",
@@ -280,12 +414,26 @@ def execute_plan(
                 evidence["collaborators"] = db.author_collaborators(author, limit=15)
             return evidence
 
-    if "authors_by_keyword" in ops:
+    if "authors_by_keyword" in ops or task == "keyword_authors":
         kw = (kws[0] if kws else None) or _pick_keyword(question, entities) or ""
-        data = db.authors_by_keyword(kw)
+        top_n = _parse_top_n(
+            plan, question, default=10 if task == "keyword_authors" else 30
+        )
+        # ranking questions usually want a short list without long paper dumps
+        papers_per = int(plan.get("papers_per_author") or (2 if task == "keyword_authors" else 8))
+        data = db.authors_by_keyword(
+            kw,
+            author_limit=top_n,
+            papers_per_author=papers_per,
+            start_year=y0,
+            end_year=y1,
+        )
         evidence.update(data)
-        evidence["task"] = task
-        evidence["scope"] = data.get("scope") or task
+        evidence["task"] = "keyword_authors"
+        evidence["scope"] = "keyword_authors"
+        evidence["top_n"] = top_n
+        if task == "keyword_authors":
+            return evidence
 
     if "institutions_by_keyword" in ops:
         kw = (kws[0] if kws else None) or _pick_keyword(question, entities) or ""
@@ -333,10 +481,16 @@ def execute_plan(
         evidence["scope"] = "top_directions"
         evidence["task"] = task
 
-    if "top_authors" in ops:
-        evidence["authors"] = db.top_authors(15, y0, y1)
-        evidence["task"] = task
-        evidence["scope"] = evidence.get("scope") or "top_teams"
+    if "top_authors" in ops or task == "top_authors":
+        top_n = _parse_top_n(plan, question, default=10 if task == "top_authors" else 15)
+        evidence["authors"] = db.top_authors(top_n, y0, y1)
+        evidence["task"] = "top_authors" if task == "top_authors" else task
+        evidence["scope"] = "top_authors" if task == "top_authors" else (
+            evidence.get("scope") or "top_teams"
+        )
+        evidence["top_n"] = top_n
+        if task == "top_authors":
+            return evidence
 
     if "top_institutions" in ops:
         top_n = _parse_top_n(plan, question, default=10 if task == "top_institutions" else 15)
@@ -346,6 +500,32 @@ def execute_plan(
             "top_institutions" if task == "top_institutions" else (evidence.get("scope") or "top_teams")
         )
         evidence["top_n"] = top_n
+
+    if "institution_authors" in ops or task == "institution_authors":
+        inst = (
+            plan.get("institution")
+            or entities.get("institution")
+            or ""
+        )
+        if not inst:
+            m = re.search(
+                r"([\u4e00-\u9fff]{2,20}(?:大学|学院|研究院|研究所|科学院))",
+                question or "",
+            )
+            inst = m.group(1) if m else ""
+        top_n = int(plan.get("top_n_authors") or plan.get("top_n") or 8)
+        per = int(plan.get("papers_per_author") or 3)
+        data = db.institution_authors_with_papers(
+            str(inst),
+            top_authors=top_n,
+            papers_per_author=per,
+            start_year=y0,
+            end_year=y1,
+        )
+        evidence.update(data)
+        evidence["task"] = "institution_authors"
+        evidence["scope"] = "institution_authors"
+        return evidence
 
     if "keywords_by_periods" in ops and y0 is not None and y1 is not None:
         evidence["periods"] = db.keywords_by_periods(_period_triples(int(y0), int(y1)), 8)
