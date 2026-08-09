@@ -5,6 +5,7 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     SQLITE_PATH=/app/data/journal.db \
+    SQLITE_PATH_RWB=/app/data/journal_rwb.db \
     PORT=8080
 
 COPY requirements.txt .
@@ -13,6 +14,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
 COPY web ./web
 COPY data/journal.db ./data/journal.db
+COPY data/journal_rwb.db ./data/journal_rwb.db
 
 EXPOSE 8080
 

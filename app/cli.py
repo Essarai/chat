@@ -31,7 +31,12 @@ def run_repl(once: str | None = None) -> int:
         from app.services.chroma_store import ChromaStore
 
         count = ChromaStore(settings).count()
-        print(f"已连接 Chroma/{settings.chroma_collection}  docs≈{count}")
+        where = (
+            f"Cloud/{settings.chroma_cloud_database}"
+            if settings.chroma_uses_cloud
+            else f"{settings.chroma_host}:{settings.chroma_port}"
+        )
+        print(f"已连接 Chroma({where})/{settings.chroma_collection}  docs≈{count}")
     except Exception as e:
         print(f"警告: Chroma 暂不可用: {e}")
 

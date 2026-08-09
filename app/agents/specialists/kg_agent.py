@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from app.agents.state import JournalState
 from app.capabilities import kg_capability
@@ -9,8 +9,9 @@ from app.capabilities import kg_capability
 def run_kg_agent(
     question: str,
     entities: Dict[str, Any] | None = None,
-    last_dois: Optional[List[str]] = None,
+    last_dois: Optional[list] = None,
     query_plan: Dict[str, Any] | None = None,
+    journal_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     result = kg_capability.invoke(
         "execute_plan",
@@ -18,6 +19,7 @@ def run_kg_agent(
         entities=entities,
         plan=query_plan or {},
         last_dois=last_dois,
+        journal_id=journal_id,
     )
     if not result.get("ok"):
         return {"error": result.get("error"), "source": "kg_capability"}
@@ -36,6 +38,7 @@ def kg_agent_node(state: JournalState) -> Dict[str, Any]:
             state.get("entities"),
             last_dois,
             plan,
+            journal_id=state.get("journal_id"),
         )
         return {"kg_evidence": data}
     except Exception as e:

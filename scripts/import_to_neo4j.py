@@ -70,8 +70,13 @@ def run_write(session, cypher: str, rows: list[dict], label: str):
     return total
 
 
-def import_all(uri: str, user: str, password: str, clear: bool) -> None:
+def import_all(uri: str, user: str, password: str, clear: bool, cleaned: Path | None = None) -> None:
+    cleaned_dir = Path(cleaned) if cleaned else CLEANED
+    if not cleaned_dir.exists():
+        print(f"Missing cleaned dir: {cleaned_dir}", file=sys.stderr)
+        sys.exit(1)
     print(f"Connecting {uri} as {user} ...")
+    print(f"Source cleaned: {cleaned_dir}")
     driver = GraphDatabase.driver(
         uri,
         auth=(user, password),
@@ -92,7 +97,7 @@ def import_all(uri: str, user: str, password: str, clear: bool) -> None:
             session.run(stmt)
 
         # --- Nodes ---
-        papers = read_csv(CLEANED / "papers.csv")
+        papers = read_csv(cleaned_dir / "papers.csv")
         paper_rows = [
             {
                 "doi": r["doi"],
@@ -131,7 +136,7 @@ def import_all(uri: str, user: str, password: str, clear: bool) -> None:
             "Paper",
         )
 
-        authors = read_csv(CLEANED / "authors.csv")
+        authors = read_csv(cleaned_dir / "authors.csv")
         author_rows = [
             {
                 "author_id": r["author_id"],
@@ -156,7 +161,7 @@ def import_all(uri: str, user: str, password: str, clear: bool) -> None:
             "Author",
         )
 
-        institutions = read_csv(CLEANED / "institutions.csv")
+        institutions = read_csv(cleaned_dir / "institutions.csv")
         inst_rows = [
             {
                 "institution_id": r["institution_id"],
@@ -182,7 +187,7 @@ def import_all(uri: str, user: str, password: str, clear: bool) -> None:
             "Institution",
         )
 
-        keywords = read_csv(CLEANED / "keywords.csv")
+        keywords = read_csv(cleaned_dir / "keywords.csv")
         kw_rows = [
             {
                 "keyword_id": r["keyword_id"],
@@ -205,7 +210,7 @@ def import_all(uri: str, user: str, password: str, clear: bool) -> None:
             "Keyword",
         )
 
-        funds = read_csv(CLEANED / "funds.csv")
+        funds = read_csv(cleaned_dir / "funds.csv")
         fund_rows = [
             {
                 "fund_id": r["fund_id"],
@@ -229,7 +234,7 @@ def import_all(uri: str, user: str, password: str, clear: bool) -> None:
             "Fund",
         )
 
-        clc_rows = read_csv(CLEANED / "paper_clc.csv")
+        clc_rows = read_csv(cleaned_dir / "paper_clc.csv")
         clc_codes: dict[str, str] = {}
         for r in clc_rows:
             code = (r.get("clc_code") or "").strip()
@@ -254,7 +259,7 @@ def import_all(uri: str, user: str, password: str, clear: bool) -> None:
         )
 
         # --- Relationships ---
-        paper_authors = read_csv(CLEANED / "paper_authors.csv")
+        paper_authors = read_csv(cleaned_dir / "paper_authors.csv")
         pa_rows = [
             {
                 "doi": r["doi"],
@@ -284,7 +289,7 @@ def import_all(uri: str, user: str, password: str, clear: bool) -> None:
             "AUTHORED_BY",
         )
 
-        author_inst = read_csv(CLEANED / "author_institutions.csv")
+        author_inst = read_csv(cleaned_dir / "author_institutions.csv")
         ai_rows = [
             {
                 "doi": r["doi"],
@@ -323,7 +328,7 @@ def import_all(uri: str, user: str, password: str, clear: bool) -> None:
             "HAS_AFFILIATION",
         )
 
-        paper_kw = read_csv(CLEANED / "paper_keywords.csv")
+        paper_kw = read_csv(cleaned_dir / "paper_keywords.csv")
         pk_rows = [
             {"doi": r["doi"], "keyword_id": r["keyword_id"]}
             for r in paper_kw
@@ -383,7 +388,7 @@ def import_all(uri: str, user: str, password: str, clear: bool) -> None:
             "PARENT_OF",
         )
 
-        awards = read_csv(CLEANED / "paper_awards.csv")
+        awards = read_csv(cleaned_dir / "paper_awards.csv")
         award_rows = [
             {
                 "doi": r["doi"],
@@ -452,17 +457,29 @@ def main():
     parser.add_argument("--user", default=DEFAULT_USER)
     parser.add_argument("--password", default=DEFAULT_PASSWORD)
     parser.add_argument(
+        "--cleaned",
+        type=Path,
+        default=CLEANED,
+        help="directory with papers.csv and related tables",
+    )
+    parser.add_argument(
         "--clear",
         action="store_true",
         help="DETACH DELETE all nodes before import",
     )
     args = parser.parse_args()
 
-    if not CLEANED.exists():
-        print(f"Missing cleaned dir: {CLEANED}", file=sys.stderr)
+    if not args.cleaned.exists():
+        print(f"Missing cleaned dir: {args.cleaned}", file=sys.stderr)
         sys.exit(1)
 
-    import_all(args.uri, args.user, args.password, clear=args.clear)
+    import_all(
+        args.uri,
+        args.user,
+        args.password,
+        clear=args.clear,
+        cleaned=args.cleaned,
+    )
 
 
 if __name__ == "__main__":

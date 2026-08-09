@@ -18,18 +18,42 @@ class ChromaStore:
         self.settings = settings or get_settings()
         self.embeddings = embeddings or MiniMaxEmbeddings(self.settings)
         try:
-            self._client = chromadb.HttpClient(
-                host=self.settings.chroma_host,
-                port=self.settings.chroma_port,
-                headers={"Authorization": f"Bearer {self.settings.chroma_token}"},
-            )
+            self._client = self._build_client()
             self._collection = self._client.get_collection(self.settings.chroma_collection)
         except Exception as e:
-            raise RuntimeError(
-                f"无法连接 Chroma ({self.settings.chroma_host}:{self.settings.chroma_port}): {e}. "
-                "若服务部署在 Railway，请确认云主机安全组对公网开放 Chroma 端口，"
-                "或改用公网可达的向量库地址。"
-            ) from e
+            raise RuntimeError(self._connect_error(e)) from e
+
+    def _build_client(self):
+        s = self.settings
+        if s.chroma_uses_cloud:
+            if not s.chroma_cloud_api_key or not s.chroma_cloud_tenant:
+                raise RuntimeError(
+                    "CHROMA_TARGET=cloud 需要设置 CHROMA_CLOUD_API_KEY 与 CHROMA_CLOUD_TENANT"
+                )
+            return chromadb.CloudClient(
+                api_key=s.chroma_cloud_api_key,
+                tenant=s.chroma_cloud_tenant,
+                database=s.chroma_cloud_database,
+            )
+        return chromadb.HttpClient(
+            host=s.chroma_host,
+            port=s.chroma_port,
+            headers={"Authorization": f"Bearer {s.chroma_token}"},
+        )
+
+    def _connect_error(self, e: Exception) -> str:
+        s = self.settings
+        if s.chroma_uses_cloud:
+            return (
+                f"无法连接 Chroma Cloud "
+                f"(database={s.chroma_cloud_database}, collection={s.chroma_collection}): {e}. "
+                "请确认 CHROMA_CLOUD_API_KEY / TENANT / DATABASE 与 collection 名称。"
+            )
+        return (
+            f"无法连接 Chroma ({s.chroma_host}:{s.chroma_port}): {e}. "
+            "若服务部署在 Railway，请确认云主机安全组对公网开放 Chroma 端口，"
+            "或改用 CHROMA_TARGET=cloud。"
+        )
 
     def count(self) -> int:
         return self._collection.count()

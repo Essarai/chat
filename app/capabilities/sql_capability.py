@@ -10,7 +10,7 @@ from app.agents.understand import (
     extract_year_window,
 )
 from app.capabilities.schemas import CapabilityResult, err_result, ok_result
-from app.config import get_settings
+from app.config import bind_corpus, get_corpus_settings, get_settings
 from app.services.sqlite_repo import SQLiteRepo
 
 _KEYWORD_AUTHOR_RE = re.compile(
@@ -25,10 +25,17 @@ _JOURNAL_OVERVIEW_RE = re.compile(
     re.I,
 )
 
+_DB_CACHE: Dict[str, SQLiteRepo] = {}
 
-def _db() -> SQLiteRepo:
-    return SQLiteRepo(get_settings())
 
+def _db(journal_id: Optional[str] = None) -> SQLiteRepo:
+    settings = bind_corpus(journal_id) if journal_id else get_settings()
+    jid = settings.journal_id
+    repo = _DB_CACHE.get(jid)
+    if repo is None:
+        repo = SQLiteRepo(get_corpus_settings(jid))
+        _DB_CACHE[jid] = repo
+    return repo
 
 def _pick_keyword(question: str, entities: Dict[str, Any]) -> Optional[str]:
     for k in entities.get("keywords") or []:
@@ -439,11 +446,12 @@ def invoke(
     question: str = "",
     entities: Dict[str, Any] | None = None,
     plan: Dict[str, Any] | None = None,
+    journal_id: Optional[str] = None,
     **params: Any,
 ) -> CapabilityResult:
     """Standardized SQL capability entrypoint."""
     try:
-        db = _db()
+        db = _db(journal_id or params.get("journal_id"))
         entities = entities or {}
         plan = plan or {}
 

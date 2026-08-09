@@ -13,6 +13,8 @@ from app.agents.understand import (
     llm_confirm_entities,
     regex_extract,
 )
+from app.config import bind_corpus
+
 
 GENE_EDIT_KWS = ["基因编辑", "CRISPR", "基因组编辑", "基因敲除"]
 
@@ -50,6 +52,8 @@ def _is_author_trajectory(question: str, entities: Dict[str, Any]) -> bool:
 
 
 def extract_node(state: JournalState) -> Dict[str, Any]:
+    if state.get("journal_id"):
+        bind_corpus(state.get("journal_id"))
     question = state.get("question") or ""
     prior = (state.get("entities") or {}).get("dois") or []
     draft = regex_extract(question, prior)
@@ -127,6 +131,42 @@ def _simple_match(
                 "focus": "说明本库无被引数据，无法排名高被引论文。",
                 "year_start": y0,
                 "year_end": y1,
+                "keywords": [],
+            },
+        )
+
+    # Journal main research directions → keyword inventory (NOT RAG editorial notices)
+    if (
+        re.search(
+            r"(主要|核心)?研究方向(有哪些|是什么|分析|归纳|总结)|"
+            r"(本刊|该刊|期刊).{0,8}(主要|核心)?研究方向|"
+            r"研究方向.{0,6}(有哪些|是什么)",
+            q,
+        )
+        and not re.search(
+            r"研究方向为|投稿|演变|发展变化|三个研究方向|发表最多|近\s*\d+\s*年发表最多",
+            q,
+        )
+    ):
+        # Broad window: “主要方向” is a corpus-level inventory, not near-term RAG.
+        y0b, y1b = _years(q, entities, default_n=20)
+        top_n = _top_n_from_question(q, 8)
+        return (
+            "sql",
+            "单源统计：期刊主要研究方向（热门关键词）",
+            {
+                "task": "top_directions_with_papers",
+                "sources": ["sql"],
+                "sql_ops": ["top_keywords", "papers_by_top_keywords"],
+                "kg_ops": [],
+                "rag_queries": [],
+                "focus": (
+                    "基于关键词发文量归纳本刊主要研究方向，并为每个方向列出代表论文；"
+                    "严禁把办刊通告、影响因子、获奖、在线优先出版等当作研究方向。"
+                ),
+                "year_start": y0b,
+                "year_end": y1b,
+                "top_n_directions": top_n,
                 "keywords": [],
             },
         )

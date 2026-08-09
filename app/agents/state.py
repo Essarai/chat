@@ -7,6 +7,7 @@ class JournalState(TypedDict, total=False):
     question: str
     history: List[Dict[str, str]]
     top_k: int
+    journal_id: str  # ZDXBNXB | ZDXBRWB — selects physically isolated corpus
 
     # stages: init | extracted | routed | retrieving | synthesizing | done
     stage: str

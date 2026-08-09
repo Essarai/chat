@@ -63,6 +63,7 @@ META_KEYS = [
     "issue",
     "pages",
     "journal",
+    "journal_id",
     "issn",
     "keywords_zh",
     "authors_zh",
@@ -187,12 +188,13 @@ def get_client(args):
 
 
 def import_docs(args):
-    if not DOCS_JSONL.exists():
-        print(f"Missing {DOCS_JSONL}", file=sys.stderr)
+    docs_path = Path(args.jsonl) if getattr(args, "jsonl", None) else DOCS_JSONL
+    if not docs_path.exists():
+        print(f"Missing {docs_path}", file=sys.stderr)
         sys.exit(1)
 
-    docs = load_docs(DOCS_JSONL)
-    print(f"Loaded {len(docs)} docs from {DOCS_JSONL}")
+    docs = load_docs(docs_path)
+    print(f"Loaded {len(docs)} docs from {docs_path}")
 
     client = get_client(args)
     try:
@@ -321,13 +323,19 @@ def main():
     p.add_argument(
         "--target",
         choices=("http", "cloud"),
-        default=os.getenv("CHROMA_TARGET", "http"),
-        help="http=self-hosted HttpClient; cloud=Chroma CloudClient",
+        default=os.getenv("CHROMA_TARGET", "cloud"),
+        help="cloud=Chroma CloudClient (default); http=self-hosted HttpClient",
     )
     p.add_argument("--host", default=DEFAULT_CHROMA_HOST)
     p.add_argument("--port", type=int, default=DEFAULT_CHROMA_PORT)
     p.add_argument("--token", default=DEFAULT_CHROMA_TOKEN)
     p.add_argument("--collection", default=DEFAULT_COLLECTION)
+    p.add_argument(
+        "--jsonl",
+        type=Path,
+        default=DOCS_JSONL,
+        help="path to documents.jsonl",
+    )
     p.add_argument("--cloud-api-key", default=DEFAULT_CLOUD_API_KEY)
     p.add_argument("--cloud-tenant", default=DEFAULT_CLOUD_TENANT)
     p.add_argument("--cloud-database", default=DEFAULT_CLOUD_DATABASE)

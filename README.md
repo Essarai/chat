@@ -1,6 +1,12 @@
 # 期刊知识助手
 
-面向期刊集群的 AI 问答 / 趋势 / 知识图谱（当前：浙江大学学报农业与生命科学版）。
+面向期刊集群的 AI 问答 / 趋势 / 知识图谱。
+
+当前支持两刊物理隔离：
+- `ZDXBNXB` 农业与生命科学版 → `data/journal.db` / Chroma `journal_papers` / 自建 Neo4j
+- `ZDXBRWB` 人文社会科学版 → `data/journal_rwb.db` / Chroma `journal_papers_rwb` / Neo4j Aura
+
+Web 顶部期刊下拉可切换；API 传 `journal_id`。
 
 ## 本地运行
 
@@ -32,10 +38,13 @@ python3 -m uvicorn app.api.main:app --host 0.0.0.0 --port 8080
 | `MINIMAX_BASE_URL` | 默认 `https://api.minimaxi.com/v1` |
 | `MINIMAX_CHAT_MODEL` | 默认 `MiniMax-Text-01` |
 | `MINIMAX_EMBED_MODEL` | 默认 `embo-01` |
-| `CHROMA_HOST` / `CHROMA_PORT` / `CHROMA_TOKEN` / `CHROMA_COLLECTION` | 远程 Chroma |
+| `CHROMA_TARGET` | 默认 `cloud`；备选 `http` |
+| `CHROMA_CLOUD_API_KEY` / `CHROMA_CLOUD_TENANT` / `CHROMA_CLOUD_DATABASE` | Chroma Cloud（`target=cloud`） |
+| `CHROMA_COLLECTION` | 默认 `journal_papers` |
+| `CHROMA_HOST` / `CHROMA_PORT` / `CHROMA_TOKEN` | 仅 `CHROMA_TARGET=http` 时需要 |
 | `NEO4J_URI` / `NEO4J_USER` / `NEO4J_PASSWORD` | 远程 Neo4j |
 | `SQLITE_PATH` | 默认 `./data/journal.db`（镜像已含库） |
 
 ### 注意
 
-Railway 出口需能访问你的 Chroma / Neo4j 主机。若安全组仅放行本机 IP，请放行 Railway 或改用公网可达地址。
+默认向量库为 Chroma Cloud。若改用自建 Chroma（`CHROMA_TARGET=http`），Railway 出口需能访问该主机；Neo4j 同理。

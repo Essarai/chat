@@ -166,6 +166,27 @@ def to_bool_yn(value) -> int:
     return 1 if (value or "").strip().upper() in {"Y", "YES", "TRUE", "1"} else 0
 
 
+def dedupe_by_key(rows: list[dict], key: str) -> list[dict]:
+    """Keep last occurrence for each key (CSV may contain duplicate primary keys)."""
+    seen: dict = {}
+    for r in rows:
+        k = (r.get(key) or "").strip()
+        if not k:
+            continue
+        seen[k] = r
+    return list(seen.values())
+
+
+def dedupe_by_keys(rows: list[dict], keys: list[str]) -> list[dict]:
+    seen: dict = {}
+    for r in rows:
+        tup = tuple((r.get(k) or "").strip() for k in keys)
+        if not all(tup):
+            continue
+        seen[tup] = r
+    return list(seen.values())
+
+
 def executemany(conn: sqlite3.Connection, sql: str, rows: list, label: str):
     if not rows:
         print(f"  {label}: 0")
@@ -178,19 +199,25 @@ def executemany(conn: sqlite3.Connection, sql: str, rows: list, label: str):
     conn.commit()
 
 
-def import_all(db_path: Path):
+def import_all(db_path: Path, cleaned: Path | None = None):
+    cleaned_dir = Path(cleaned) if cleaned else CLEANED
+    if not cleaned_dir.exists():
+        print(f"Missing cleaned dir: {cleaned_dir}", file=sys.stderr)
+        sys.exit(1)
+
     db_path.parent.mkdir(parents=True, exist_ok=True)
     if db_path.exists():
         db_path.unlink()
 
     print(f"Creating SQLite DB: {db_path}")
+    print(f"Source cleaned: {cleaned_dir}")
     conn = sqlite3.connect(str(db_path))
     conn.execute("PRAGMA journal_mode=WAL")
     t0 = time.time()
     try:
         conn.executescript(SCHEMA)
 
-        papers = read_csv(CLEANED / "papers.csv")
+        papers = dedupe_by_key(read_csv(cleaned_dir / "papers.csv"), "doi")
         paper_rows = [
             (
                 r["doi"],
@@ -234,7 +261,7 @@ def import_all(db_path: Path):
             "papers",
         )
 
-        authors = read_csv(CLEANED / "authors.csv")
+        authors = dedupe_by_key(read_csv(cleaned_dir / "authors.csv"), "author_id")
         author_rows = [
             (
                 r["author_id"],
@@ -255,7 +282,9 @@ def import_all(db_path: Path):
             "authors",
         )
 
-        institutions = read_csv(CLEANED / "institutions.csv")
+        institutions = dedupe_by_key(
+            read_csv(cleaned_dir / "institutions.csv"), "institution_id"
+        )
         inst_rows = [
             (
                 r["institution_id"],
@@ -281,7 +310,7 @@ def import_all(db_path: Path):
             "institutions",
         )
 
-        keywords = read_csv(CLEANED / "keywords.csv")
+        keywords = dedupe_by_key(read_csv(cleaned_dir / "keywords.csv"), "keyword_id")
         kw_rows = [
             (
                 r["keyword_id"],
@@ -300,7 +329,7 @@ def import_all(db_path: Path):
             "keywords",
         )
 
-        funds = read_csv(CLEANED / "funds.csv")
+        funds = dedupe_by_key(read_csv(cleaned_dir / "funds.csv"), "fund_id")
         fund_rows = [
             (
                 r["fund_id"],
@@ -320,7 +349,9 @@ def import_all(db_path: Path):
             "funds",
         )
 
-        paper_authors = read_csv(CLEANED / "paper_authors.csv")
+        paper_authors = dedupe_by_keys(
+            read_csv(cleaned_dir / "paper_authors.csv"), ["doi", "author_order"]
+        )
         pa_rows = [
             (
                 r["doi"],
@@ -348,7 +379,10 @@ def import_all(db_path: Path):
             "paper_authors",
         )
 
-        author_inst = read_csv(CLEANED / "author_institutions.csv")
+        author_inst = dedupe_by_keys(
+            read_csv(cleaned_dir / "author_institutions.csv"),
+            ["doi", "author_id", "institution_id"],
+        )
         ai_rows = [
             (
                 r["doi"],
@@ -367,7 +401,9 @@ def import_all(db_path: Path):
             "author_institutions",
         )
 
-        paper_kw = read_csv(CLEANED / "paper_keywords.csv")
+        paper_kw = dedupe_by_keys(
+            read_csv(cleaned_dir / "paper_keywords.csv"), ["doi", "keyword_id"]
+        )
         pk_rows = [
             (
                 r["doi"],
@@ -386,7 +422,9 @@ def import_all(db_path: Path):
             "paper_keywords",
         )
 
-        paper_clc = read_csv(CLEANED / "paper_clc.csv")
+        paper_clc = dedupe_by_keys(
+            read_csv(cleaned_dir / "paper_clc.csv"), ["doi", "clc_code"]
+        )
         clc_rows = [
             (
                 r["doi"],
@@ -404,7 +442,7 @@ def import_all(db_path: Path):
             "paper_clc",
         )
 
-        awards = read_csv(CLEANED / "paper_awards.csv")
+        awards = read_csv(cleaned_dir / "paper_awards.csv")
         award_rows = [
             (
                 r["doi"],
@@ -454,11 +492,17 @@ def import_all(db_path: Path):
 def main():
     parser = argparse.ArgumentParser(description="Import cleaned CSVs into SQLite")
     parser.add_argument("--db", type=Path, default=DEFAULT_DB)
+    parser.add_argument(
+        "--cleaned",
+        type=Path,
+        default=CLEANED,
+        help="directory with papers.csv and related tables",
+    )
     args = parser.parse_args()
-    if not CLEANED.exists():
-        print(f"Missing cleaned dir: {CLEANED}", file=sys.stderr)
+    if not args.cleaned.exists():
+        print(f"Missing cleaned dir: {args.cleaned}", file=sys.stderr)
         sys.exit(1)
-    import_all(args.db)
+    import_all(args.db, cleaned=args.cleaned)
 
 
 if __name__ == "__main__":

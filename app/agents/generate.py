@@ -8,12 +8,11 @@ from app.agents.evidence_guard import (
     enforce_evidence_constraints,
 )
 from app.agents.state import JournalState
-from app.config import get_settings
+from app.config import bind_corpus, get_settings
 from app.services.minimax_chat import MiniMaxChat
 from app.utils import doi_url
 
-SYSTEM_PROMPT = """你是《浙江大学学报（农业与生命科学版）》的资深学术分析助手。
-请严格基于多路证据（[SQL] / [KG] / [RAG]）与「证据约束」清单综合推理后作答。
+_SYSTEM_PROMPT_BODY = """请严格基于多路证据（[SQL] / [KG] / [RAG]）与「证据约束」清单综合推理后作答。
 
 写作目标（升维，不是数据报表）：
 1. 先给洞察结论（趋势、格局、机制/网络含义），再给必要证据支撑；禁止逐年逐条流水账。
@@ -34,6 +33,15 @@ SYSTEM_PROMPT = """你是《浙江大学学报（农业与生命科学版）》�
 - 主题演变/合作网络：突出阶段跃迁、核心节点与邻域结构，少堆原始计数。
 - 链接：DOI 纯文本；全文用 `[查看全文](url)`。
 """
+
+
+def build_system_prompt(journal_title: str | None = None) -> str:
+    title = journal_title or get_settings().journal_title
+    return f"你是《{title}》的资深学术分析助手。\n{_SYSTEM_PROMPT_BODY}"
+
+
+# Backward-compatible default (农生)
+SYSTEM_PROMPT = build_system_prompt("浙江大学学报（农业与生命科学版）")
 
 
 def _build_instruction(
@@ -81,6 +89,7 @@ def _build_instruction(
         "top_institutions",
         "topic_coverage",
         "author_profile",
+        "top_directions_with_papers",
     }:
         extra = ""
         if task in {
@@ -89,8 +98,14 @@ def _build_instruction(
             "top_institutions",
             "topic_coverage",
             "author_profile",
+            "top_directions_with_papers",
         }:
             extra = "本题为 SQL 结构化任务：禁止编造 DOI；禁止引用证据外论文；名单必须来自证据。"
+        if task == "top_directions_with_papers":
+            extra += (
+                "研究方向=证据中的热门关键词/directions，按发文量归纳学科主题；"
+                "严禁把在线优先出版、影响因子、CSSCI排名、获奖、办刊通告当作研究方向。"
+            )
         return (
             f"本题任务={task}。{insight}{extra}{analysis_hint}"
             "凡必须点名的名单用有序序号；不要写参考文献；DOI 用纯文本。"
@@ -1023,6 +1038,8 @@ def _cleanup_answer(text: str, intents: List[str]) -> str:
 
 
 def build_generate_messages(state: JournalState) -> List[Dict[str, str]]:
+    if state.get("journal_id"):
+        bind_corpus(state.get("journal_id"))
     settings = get_settings()
     question = state.get("question") or ""
     intents = state.get("intents") or []
@@ -1049,7 +1066,9 @@ def build_generate_messages(state: JournalState) -> List[Dict[str, str]]:
         "禁止答非所问、套用无关全刊概览，或把证据复述成数据报表。"
         "只输出面向用户的最终答案，不要输出路由、意图、分析规划原文或修正说明。"
     )
-    messages: List[Dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages: List[Dict[str, str]] = [
+        {"role": "system", "content": build_system_prompt(settings.journal_title)}
+    ]
     max_h = settings.chat_max_history
     for item in history[-max_h:]:
         messages.append(item)

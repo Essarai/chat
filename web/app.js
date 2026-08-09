@@ -7,6 +7,7 @@
   const questionEl = $("#question");
   const askBtn = $("#ask-btn");
   const resetBtn = $("#reset-btn");
+  const journalSelect = $("#journal-select");
   const graphForm = $("#graph-form");
   const graphCanvas = $("#graph-canvas");
   const graphLegend = $("#graph-legend");
@@ -26,12 +27,53 @@
   let selectedYear = null;
   let yearlyRowsCache = [];
 
-  const PRESETS = [
-    { q: "徐建明全部发文", label: "作者发文" },
-    { q: "徐建明合作的作者所属机构情况", label: "合作机构" },
-    { q: "徐建明和施加春合作的发文有哪些", label: "合著论文" },
-  ];
+  function currentJournalId() {
+    return (journalSelect && journalSelect.value) || "ZDXBNXB";
+  }
 
+  function withJournal(path) {
+    const sep = path.includes("?") ? "&" : "?";
+    return `${path}${sep}journal_id=${encodeURIComponent(currentJournalId())}`;
+  }
+
+  const PRESETS_BY_JOURNAL = {
+    ZDXBNXB: [
+      { q: "徐建明全部发文", label: "作者发文" },
+      { q: "徐建明合作的作者所属机构情况", label: "合作机构" },
+      { q: "徐建明和施加春合作的发文有哪些", label: "合著论文" },
+    ],
+    ZDXBRWB: [
+      { q: "近十年发文趋势和热门关键词？", label: "发文趋势" },
+      { q: "本刊主要研究方向有哪些？", label: "研究方向" },
+      { q: "浙江大学相关作者有哪些代表性成果？", label: "代表成果" },
+    ],
+  };
+
+  const GRAPH_DEFAULTS_BY_JOURNAL = {
+    ZDXBNXB: {
+      author: "朱军",
+      keyword: "水稻",
+      institution: "浙江大学",
+      paper: "",
+    },
+    ZDXBRWB: {
+      author: "",
+      keyword: "法治",
+      institution: "浙江大学",
+      paper: "",
+    },
+  };
+
+  function getPresets() {
+    return PRESETS_BY_JOURNAL[currentJournalId()] || PRESETS_BY_JOURNAL.ZDXBNXB;
+  }
+
+  function getGraphDefaults() {
+    return (
+      GRAPH_DEFAULTS_BY_JOURNAL[currentJournalId()] ||
+      GRAPH_DEFAULTS_BY_JOURNAL.ZDXBNXB
+    );
+  }
   const COLORS = {
     author: "#1a73e8",
     collaborator: "#5b9cf5",
@@ -647,7 +689,11 @@
       const res = await fetch("/ask/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: q, reset: resetFlag }),
+        body: JSON.stringify({
+          question: q,
+          reset: resetFlag,
+          journal_id: currentJournalId(),
+        }),
       });
       if (!res.ok) {
         let detail = res.statusText;
@@ -906,7 +952,7 @@
       cap.textContent = "热门关键词";
     }
     try {
-      const kwRes = await api(`/trends/keywords?${qs}`);
+      const kwRes = await api(withJournal(`/trends/keywords?${qs}`));
       drawBarChart($("#keyword-chart"), kwRes.keywords || []);
     } catch (err) {
       $("#keyword-chart").textContent = `加载失败：${err.message || err}`;
@@ -915,7 +961,7 @@
 
   async function loadTrends() {
     try {
-      const yearlyRes = await api("/trends/yearly");
+      const yearlyRes = await api(withJournal("/trends/yearly"));
       yearlyRowsCache = yearlyRes.yearly || [];
       drawLineChart($("#yearly-chart"), yearlyRowsCache);
       await refreshKeywordChart();
@@ -946,7 +992,7 @@
     if (!el) return;
     el.innerHTML =
       `<span class="presets-label">示例</span>` +
-      PRESETS.map(
+      getPresets().map(
         (p) =>
           `<button type="button" data-q="${escapeHtml(p.q)}">${escapeHtml(p.label)}</button>`
       ).join("");
@@ -1365,29 +1411,32 @@
 
   const GRAPH_HINTS = {
     author: "请输入作者姓名",
-    keyword: "请输入关键词，如：水稻",
+    keyword: "请输入关键词",
     institution: "请输入机构名，如：浙江大学",
     paper: "请输入论文 DOI",
   };
 
-  const GRAPH_DEFAULTS = {
-    author: "朱军",
-    keyword: "水稻",
-    institution: "浙江大学",
-    paper: "",
-  };
-
   async function fetchGraphData(mode, q) {
     if (mode === "author") {
-      return api(`/graph/network/author?name=${encodeURIComponent(q)}&limit=20`);
+      return api(
+        withJournal(`/graph/network/author?name=${encodeURIComponent(q)}&limit=20`)
+      );
     }
     if (mode === "keyword") {
-      return api(`/graph/network/keyword?keyword=${encodeURIComponent(q)}&limit=20`);
+      return api(
+        withJournal(
+          `/graph/network/keyword?keyword=${encodeURIComponent(q)}&limit=20`
+        )
+      );
     }
     if (mode === "institution") {
-      return api(`/graph/network/institution?name=${encodeURIComponent(q)}&limit=20`);
+      return api(
+        withJournal(
+          `/graph/network/institution?name=${encodeURIComponent(q)}&limit=20`
+        )
+      );
     }
-    return api(`/graph/network/paper?doi=${encodeURIComponent(q)}`);
+    return api(withJournal(`/graph/network/paper?doi=${encodeURIComponent(q)}`));
   }
 
   async function loadGraph() {
@@ -1452,12 +1501,43 @@
   $("#graph-mode").addEventListener("change", () => {
     const mode = $("#graph-mode").value;
     const input = $("#graph-query");
+    const defaults = getGraphDefaults();
+    const allDefaults = [
+      ...Object.values(GRAPH_DEFAULTS_BY_JOURNAL.ZDXBNXB),
+      ...Object.values(GRAPH_DEFAULTS_BY_JOURNAL.ZDXBRWB),
+    ];
     input.placeholder = GRAPH_HINTS[mode] || "";
-    if (!input.value.trim() || Object.values(GRAPH_DEFAULTS).includes(input.value.trim())) {
-      input.value = GRAPH_DEFAULTS[mode] || "";
+    if (!input.value.trim() || allDefaults.includes(input.value.trim())) {
+      input.value = defaults[mode] || "";
     }
   });
 
+  if (journalSelect) {
+    journalSelect.addEventListener("change", () => {
+      needsReset = true;
+      messagesEl.innerHTML = "";
+      showWelcome();
+      renderPresets();
+      trendsLoaded = false;
+      selectedYear = null;
+      yearlyRowsCache = [];
+      graphCache.clear();
+      stopGraph();
+      graphCanvas.innerHTML = "";
+      graphStatus.textContent = "";
+      const mode = $("#graph-mode").value;
+      $("#graph-query").value = getGraphDefaults()[mode] || "";
+      $("#graph-query").placeholder = GRAPH_HINTS[mode] || "";
+      const active = document.querySelector(".tab.is-active")?.dataset?.tab;
+      if (active === "trends") loadTrends();
+    });
+  }
+
   renderPresets();
   showWelcome();
+  {
+    const mode = $("#graph-mode").value;
+    $("#graph-query").value = getGraphDefaults()[mode] || "";
+    $("#graph-query").placeholder = GRAPH_HINTS[mode] || "";
+  }
 })();

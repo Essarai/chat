@@ -7,7 +7,7 @@ from app.agents.controller import prepare_journal_agent, run_journal_agent
 from app.agents.fusion import finalize_answer, stream_generate
 from app.agents.understand import extract_year_window, regex_extract
 from app.capabilities import kg_capability, rag_capability, sql_capability
-from app.config import Settings, get_settings
+from app.config import Settings, bind_corpus, get_settings
 from app.services.minimax_chat import MiniMaxChat
 from app.services.neo4j_repo import Neo4jRepo
 from app.services.sqlite_repo import SQLiteRepo
@@ -56,9 +56,16 @@ class ChatOrchestrator:
         self.history.clear()
         self.last_dois.clear()
 
+    def _bind(self) -> Settings:
+        return bind_corpus(self.settings.journal_id)
+
     def search(self, query: str, top_k: Optional[int] = None) -> List[Dict[str, Any]]:
+        self._bind()
         result = rag_capability.invoke(
-            "semantic_search", question=query, top_k=top_k
+            "semantic_search",
+            question=query,
+            top_k=top_k,
+            journal_id=self.settings.journal_id,
         )
         data = result.get("data") or {}
         hits = data.get("hits") or []
@@ -66,6 +73,7 @@ class ChatOrchestrator:
         return hits
 
     def trends(self, question: str = "") -> Dict[str, Any]:
+        self._bind()
         y0, y1 = extract_year_window(question or "近十年", default_last_n=10)
         result = sql_capability.invoke(
             "execute_plan",
@@ -77,10 +85,12 @@ class ChatOrchestrator:
                 "year_start": y0,
                 "year_end": y1,
             },
+            journal_id=self.settings.journal_id,
         )
         return result.get("data") or {}
 
     def graph_lookup(self, question: str) -> Dict[str, Any]:
+        self._bind()
         ents = regex_extract(question, self.last_dois)
         result = kg_capability.invoke(
             "execute_plan",
@@ -88,6 +98,7 @@ class ChatOrchestrator:
             entities=ents,
             plan={"kg_ops": ["author_ego"] if ents.get("author_name") else ["keyword_ego"]},
             last_dois=self.last_dois,
+            journal_id=self.settings.journal_id,
         )
         return result.get("data") or {}
 
@@ -134,16 +145,19 @@ class ChatOrchestrator:
         )
 
     def ask(self, question: str, top_k: Optional[int] = None) -> AskResult:
+        self._bind()
         final = run_journal_agent(
             question,
             history=self.history,
             top_k=top_k,
             last_dois=self.last_dois,
+            journal_id=self.settings.journal_id,
         )
         return self._pack_result(question, final, final.get("answer") or "")
 
     def ask_stream(self, question: str, top_k: Optional[int] = None) -> Iterator[Dict[str, Any]]:
         """Yield SSE-friendly events: status → delta* → done | error."""
+        self._bind()
         yield {"type": "status", "message": "检索与分析中…"}
         try:
             prepared = prepare_journal_agent(
@@ -151,6 +165,7 @@ class ChatOrchestrator:
                 history=self.history,
                 top_k=top_k,
                 last_dois=self.last_dois,
+                journal_id=self.settings.journal_id,
             )
         except Exception as e:
             yield {"type": "error", "message": str(e)}

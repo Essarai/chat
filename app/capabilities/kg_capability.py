@@ -5,19 +5,33 @@ from typing import Any, Dict, List, Optional
 
 from app.agents.understand import extract_author_name
 from app.capabilities.schemas import CapabilityResult, err_result, ok_result
-from app.config import get_settings
+from app.config import bind_corpus, get_corpus_settings, get_settings
 from app.services.neo4j_repo import Neo4jRepo
 from app.services.sqlite_repo import SQLiteRepo
 from app.utils import doi_url
 
+_NEO4J_CACHE: Dict[str, Neo4jRepo] = {}
+_DB_CACHE: Dict[str, SQLiteRepo] = {}
 
-def _neo4j() -> Neo4jRepo:
-    return Neo4jRepo(get_settings())
+
+def _neo4j(journal_id: Optional[str] = None) -> Neo4jRepo:
+    settings = bind_corpus(journal_id) if journal_id else get_settings()
+    jid = settings.journal_id
+    repo = _NEO4J_CACHE.get(jid)
+    if repo is None:
+        repo = Neo4jRepo(get_corpus_settings(jid))
+        _NEO4J_CACHE[jid] = repo
+    return repo
 
 
-def _db() -> SQLiteRepo:
-    return SQLiteRepo(get_settings())
-
+def _db(journal_id: Optional[str] = None) -> SQLiteRepo:
+    settings = bind_corpus(journal_id) if journal_id else get_settings()
+    jid = settings.journal_id
+    repo = _DB_CACHE.get(jid)
+    if repo is None:
+        repo = SQLiteRepo(get_corpus_settings(jid))
+        _DB_CACHE[jid] = repo
+    return repo
 
 def _normalize_keyword_network(data: Dict[str, Any], keyword: str) -> Dict[str, Any]:
     """Flatten Neo4j graph payload into analyst-friendly neighborhood lists."""
@@ -217,9 +231,13 @@ def invoke(
     entities: Dict[str, Any] | None = None,
     plan: Dict[str, Any] | None = None,
     last_dois: Optional[List[str]] = None,
+    journal_id: Optional[str] = None,
     **params: Any,
 ) -> CapabilityResult:
     try:
+        jid = journal_id or params.get("journal_id")
+        if jid:
+            bind_corpus(jid)
         if operation == "execute_plan":
             return ok_result(
                 "kg",

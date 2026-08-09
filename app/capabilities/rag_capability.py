@@ -3,9 +3,21 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.capabilities.schemas import CapabilityResult, err_result, ok_result
-from app.config import get_settings
+from app.config import bind_corpus, get_corpus_settings, get_settings
 from app.services.chroma_store import ChromaStore
 from app.utils import doi_url
+
+_CHROMA_CACHE: Dict[str, ChromaStore] = {}
+
+
+def _store(journal_id: Optional[str] = None) -> ChromaStore:
+    settings = bind_corpus(journal_id) if journal_id else get_settings()
+    jid = settings.journal_id
+    store = _CHROMA_CACHE.get(jid)
+    if store is None:
+        store = ChromaStore(get_corpus_settings(jid))
+        _CHROMA_CACHE[jid] = store
+    return store
 
 
 def citation_from_hit(h: Dict[str, Any]) -> Dict[str, Any]:
@@ -99,9 +111,10 @@ def semantic_search(
     top_k: Optional[int] = None,
     year_start: Optional[int] = None,
     year_end: Optional[int] = None,
+    journal_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    settings = get_settings()
-    store = ChromaStore(settings)
+    settings = bind_corpus(journal_id) if journal_id else get_settings()
+    store = _store(settings.journal_id)
     k = top_k or settings.rag_top_k
     qlist = [q.strip() for q in (queries or []) if q and str(q).strip()]
     if not qlist:
@@ -162,6 +175,7 @@ def invoke(
     top_k: Optional[int] = None,
     year_start: Optional[int] = None,
     year_end: Optional[int] = None,
+    journal_id: Optional[str] = None,
     **params: Any,
 ) -> CapabilityResult:
     try:
@@ -174,6 +188,7 @@ def invoke(
                 if year_start is not None
                 else params.get("year_start"),
                 year_end=year_end if year_end is not None else params.get("year_end"),
+                journal_id=journal_id or params.get("journal_id"),
             )
             return ok_result(
                 "rag",

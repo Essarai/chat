@@ -13,7 +13,7 @@ from app.agents.orchestrator_react import react_controller_node
 from app.agents.router_v2 import extract_node, router_node
 from app.agents.simple_exec import simple_exec_node
 from app.agents.state import JournalState
-from app.config import get_settings
+from app.config import bind_corpus, get_settings
 
 
 def init_state(
@@ -21,12 +21,14 @@ def init_state(
     history: Optional[List[Dict[str, str]]] = None,
     top_k: Optional[int] = None,
     last_dois: Optional[List[str]] = None,
+    journal_id: Optional[str] = None,
 ) -> JournalState:
-    settings = get_settings()
+    settings = bind_corpus(journal_id or get_settings().journal_id)
     return {
         "question": question,
         "history": history or [],
         "top_k": top_k or settings.rag_top_k,
+        "journal_id": settings.journal_id,
         "entities": {"dois": last_dois or []},
         "errors": [],
         "stage": "init",
@@ -119,8 +121,11 @@ def run_journal_agent(
     history: Optional[List[Dict[str, str]]] = None,
     top_k: Optional[int] = None,
     last_dois: Optional[List[str]] = None,
+    journal_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    return get_compiled_graph().invoke(init_state(question, history, top_k, last_dois))
+    state = init_state(question, history, top_k, last_dois, journal_id=journal_id)
+    bind_corpus(state["journal_id"])
+    return get_compiled_graph().invoke(state)
 
 
 def prepare_journal_agent(
@@ -128,8 +133,11 @@ def prepare_journal_agent(
     history: Optional[List[Dict[str, str]]] = None,
     top_k: Optional[int] = None,
     last_dois: Optional[List[str]] = None,
+    journal_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    return get_prepare_graph().invoke(init_state(question, history, top_k, last_dois))
+    state = init_state(question, history, top_k, last_dois, journal_id=journal_id)
+    bind_corpus(state["journal_id"])
+    return get_prepare_graph().invoke(state)
 
 
 __all__ = [

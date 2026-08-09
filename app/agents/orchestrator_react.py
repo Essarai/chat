@@ -264,9 +264,11 @@ def _run_tool(
     entities = dict(state.get("entities") or {})
     args = args or {}
 
+    journal_id = state.get("journal_id")
+
     if action == "sql_agent":
         plan = _build_sql_plan(args, question, entities)
-        data = run_sql_agent(question, entities, plan)
+        data = run_sql_agent(question, entities, plan, journal_id=journal_id)
         prev = state.get("sql_evidence") or {}
         merged = _merge_sql(prev if isinstance(prev, dict) else {}, data)
         summary = _summarize("sql", data)
@@ -298,7 +300,13 @@ def _run_tool(
         }
         if args.get("operation") == "author_ego" or plan.get("author_name"):
             plan["kg_ops"] = ["author_ego"]
-        data = run_kg_agent(question, {**entities, "keywords": kws}, entities.get("dois") or [], plan)
+        data = run_kg_agent(
+            question,
+            {**entities, "keywords": kws},
+            entities.get("dois") or [],
+            plan,
+            journal_id=journal_id,
+        )
         prev_kg = state.get("kg_evidence") or {}
         if isinstance(prev_kg, dict) and prev_kg and isinstance(data, dict):
             # Keep keyword neighborhood when a follow-up author_ego arrives.
@@ -365,6 +373,7 @@ def _run_tool(
             queries=queries,
             year_start=y0,
             year_end=y1,
+            journal_id=journal_id,
         )
         ents = dict(entities)
         ents["dois"] = [h.get("doi") for h in data.get("hits") or [] if h.get("doi")]
@@ -635,6 +644,10 @@ def _heuristic_first_action(
 
 def react_controller_node(state: JournalState) -> Dict[str, Any]:
     """Run controlled ReAct loop; write evidence + trace into state."""
+    from app.config import bind_corpus
+
+    if state.get("journal_id"):
+        bind_corpus(state.get("journal_id"))
     chat = MiniMaxChat(get_settings())
     question = state.get("question") or ""
     entities = dict(state.get("entities") or {})

@@ -249,19 +249,26 @@ def plan_analysis(
                 _subgoal("synthesize", "形成期刊学术发展总览结论", needs=["sql"]),
             ]
         elif "directions_then_papers" in complex_feats or re.search(
-            r"三个研究方向|发表最多的.*方向", q
+            r"三个研究方向|发表最多的.*方向|(主要|核心)?研究方向(有哪些|是什么|分析)|"
+            r"(本刊|该刊).{0,8}研究方向",
+            q,
         ):
+            needs = ["sql", "rag"] if re.search(r"三个|发表最多|成果", q) else ["sql"]
             subgoals = [
                 _subgoal(
                     "inventory",
-                    "统计近区间发文最多的研究方向及代表论文",
-                    needs=["sql", "rag"],
+                    "统计本刊主要研究方向（热门关键词）及代表论文",
+                    needs=needs,
                     query_hint={
                         "task": "top_directions_with_papers",
                         "sql_ops": ["top_keywords", "papers_by_top_keywords"],
                     },
                 ),
-                _subgoal("synthesize", "总结各方向重要研究成果", needs=["sql", "rag"]),
+                _subgoal(
+                    "synthesize",
+                    "归纳主要研究方向格局（勿将办刊通告/影响因子当作方向）",
+                    needs=needs,
+                ),
             ]
         elif "teams_and_evolution" in complex_feats or (
             re.search(r"研究团队|影响力最高", q) and re.search(r"方向|变化|演变", q)

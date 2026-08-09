@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -11,14 +10,21 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from app.config import get_settings
+from app.config import (
+    DEFAULT_JOURNAL_ID,
+    bind_corpus,
+    get_corpus_settings,
+    get_settings,
+    list_journals,
+    set_current_journal,
+)
 
 WEB_DIR = Path(__file__).resolve().parents[2] / "web"
 
 app = FastAPI(
     title="AI 期刊知识助手",
     description="智能检索 / 趋势分析 / 知识图谱查询 / RAG 问答",
-    version="0.2.0",
+    version="0.3.0",
 )
 
 app.add_middleware(
@@ -29,40 +35,55 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+_bots: Dict[str, Any] = {}
 
-@lru_cache()
-def get_bot():
+
+def get_bot(journal_id: Optional[str] = None):
+    """Per-corpus orchestrator; also sets request-scoped journal context."""
     # Lazy import: chromadb/langgraph are heavy and would block Railway healthchecks.
     from app.services.orchestrator import ChatOrchestrator
 
-    return ChatOrchestrator(get_settings())
+    settings = bind_corpus(journal_id)
+    jid = settings.journal_id
+    bot = _bots.get(jid)
+    if bot is None:
+        bot = ChatOrchestrator(settings)
+        _bots[jid] = bot
+    else:
+        # Ensure this request context is bound even when bot is cached
+        bind_corpus(jid)
+    return bot
 
 
 class SearchRequest(BaseModel):
     query: str
     top_k: Optional[int] = Field(default=None, ge=1, le=20)
+    journal_id: str = DEFAULT_JOURNAL_ID
 
 
 class AskRequest(BaseModel):
     question: str
     top_k: Optional[int] = Field(default=None, ge=1, le=20)
     reset: bool = False
+    journal_id: str = DEFAULT_JOURNAL_ID
 
 
 @app.get("/health")
 def health() -> Dict[str, Any]:
     """Liveness probe for Railway — must not call Chroma/Neo4j (may be unreachable)."""
-    settings = get_settings()
+    settings = get_corpus_settings(DEFAULT_JOURNAL_ID)
     vis_js = WEB_DIR / "vendor" / "vis-network.min.js"
     vis_css = WEB_DIR / "vendor" / "vis-network.min.css"
     return {
         "ok": True,
         "chat_model": settings.minimax_chat_model,
         "embed_model": settings.minimax_embed_model,
+        "chroma_target": settings.chroma_target,
         "collection": settings.chroma_collection,
         "sqlite_path": settings.sqlite_path,
+        "journals": list_journals(),
         "frontend": {
-            "asset_version": "20260807c",
+            "asset_version": "20260808a",
             "vis_network_js": vis_js.exists(),
             "vis_network_css": vis_css.exists(),
             "vis_network_js_bytes": vis_js.stat().st_size if vis_js.exists() else 0,
@@ -70,14 +91,25 @@ def health() -> Dict[str, Any]:
     }
 
 
+@app.get("/journals")
+def journals() -> Dict[str, Any]:
+    return {"journals": list_journals(), "default": DEFAULT_JOURNAL_ID}
+
+
 @app.get("/health/ready")
-def health_ready() -> Dict[str, Any]:
+def health_ready(
+    journal_id: str = Query(default=DEFAULT_JOURNAL_ID),
+) -> Dict[str, Any]:
     """Optional readiness check against remote dependencies."""
+    jid = set_current_journal(journal_id)
     settings = get_settings()
     status: Dict[str, Any] = {
         "ok": True,
+        "journal_id": jid,
         "chat_model": settings.minimax_chat_model,
+        "chroma_target": settings.chroma_target,
         "collection": settings.chroma_collection,
+        "sqlite_path": settings.sqlite_path,
     }
     try:
         from app.services.chroma_store import ChromaStore
@@ -92,15 +124,15 @@ def health_ready() -> Dict[str, Any]:
 @app.post("/search")
 def search(req: SearchRequest) -> Dict[str, Any]:
     try:
-        hits = get_bot().search(req.query, top_k=req.top_k)
+        hits = get_bot(req.journal_id).search(req.query, top_k=req.top_k)
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
-    return {"query": req.query, "hits": hits}
+    return {"query": req.query, "journal_id": set_current_journal(req.journal_id), "hits": hits}
 
 
 @app.post("/ask")
 def ask(req: AskRequest) -> Dict[str, Any]:
-    bot = get_bot()
+    bot = get_bot(req.journal_id)
     if req.reset:
         bot.reset()
     try:
@@ -109,6 +141,7 @@ def ask(req: AskRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=502, detail=str(e)) from e
     return {
         "question": req.question,
+        "journal_id": set_current_journal(req.journal_id),
         "intent": result.intent,
         "intents": result.intents,
         "route_reason": result.route_reason,
@@ -120,11 +153,14 @@ def ask(req: AskRequest) -> Dict[str, Any]:
 
 @app.post("/ask/stream")
 def ask_stream(req: AskRequest) -> StreamingResponse:
-    bot = get_bot()
+    bot = get_bot(req.journal_id)
     if req.reset:
         bot.reset()
 
     def event_gen():
+        # Re-bind corpus for this generator thread/context (StreamingResponse
+        # may run outside the request thread that called get_bot).
+        bind_corpus(req.journal_id)
         try:
             for ev in bot.ask_stream(req.question, top_k=req.top_k):
                 yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
@@ -146,12 +182,13 @@ def ask_stream(req: AskRequest) -> StreamingResponse:
 def trends_yearly(
     start_year: Optional[int] = Query(default=None),
     end_year: Optional[int] = Query(default=None),
+    journal_id: str = Query(default=DEFAULT_JOURNAL_ID),
 ) -> Dict[str, Any]:
     try:
-        rows = get_bot().db.yearly_counts(start_year, end_year)
+        rows = get_bot(journal_id).db.yearly_counts(start_year, end_year)
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
-    return {"yearly": rows}
+    return {"yearly": rows, "journal_id": set_current_journal(journal_id)}
 
 
 @app.get("/trends/keywords")
@@ -159,18 +196,22 @@ def trends_keywords(
     limit: int = Query(default=20, ge=1, le=100),
     start_year: Optional[int] = Query(default=None),
     end_year: Optional[int] = Query(default=None),
+    journal_id: str = Query(default=DEFAULT_JOURNAL_ID),
 ) -> Dict[str, Any]:
     try:
-        rows = get_bot().db.top_keywords(limit, start_year, end_year)
+        rows = get_bot(journal_id).db.top_keywords(limit, start_year, end_year)
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
-    return {"keywords": rows}
+    return {"keywords": rows, "journal_id": set_current_journal(journal_id)}
 
 
 @app.get("/graph/paper/{doi:path}")
-def graph_paper(doi: str) -> Dict[str, Any]:
+def graph_paper(
+    doi: str,
+    journal_id: str = Query(default=DEFAULT_JOURNAL_ID),
+) -> Dict[str, Any]:
     try:
-        data = get_bot().neo4j.paper_neighborhood(doi)
+        data = get_bot(journal_id).neo4j.paper_neighborhood(doi)
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
     if not data:
@@ -182,9 +223,12 @@ def graph_paper(doi: str) -> Dict[str, Any]:
 def graph_author(
     author_id: str,
     limit: int = Query(default=20, ge=1, le=100),
+    journal_id: str = Query(default=DEFAULT_JOURNAL_ID),
 ) -> Dict[str, Any]:
     try:
-        data = get_bot().neo4j.author_collaborators(author_id=author_id, limit=limit)
+        data = get_bot(journal_id).neo4j.author_collaborators(
+            author_id=author_id, limit=limit
+        )
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
     if not data.get("author"):
@@ -196,9 +240,10 @@ def graph_author(
 def graph_author_by_name(
     name: str = Query(...),
     limit: int = Query(default=20, ge=1, le=100),
+    journal_id: str = Query(default=DEFAULT_JOURNAL_ID),
 ) -> Dict[str, Any]:
     try:
-        data = get_bot().neo4j.author_collaborators(name=name, limit=limit)
+        data = get_bot(journal_id).neo4j.author_collaborators(name=name, limit=limit)
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
     if not data.get("author"):
@@ -210,9 +255,10 @@ def graph_author_by_name(
 def graph_network_author(
     name: str = Query(...),
     limit: int = Query(default=20, ge=1, le=100),
+    journal_id: str = Query(default=DEFAULT_JOURNAL_ID),
 ) -> Dict[str, Any]:
     try:
-        data = get_bot().neo4j.author_network(name=name, limit=limit)
+        data = get_bot(journal_id).neo4j.author_network(name=name, limit=limit)
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
     if not data.get("author"):
@@ -221,9 +267,12 @@ def graph_network_author(
 
 
 @app.get("/graph/network/paper")
-def graph_network_paper(doi: str = Query(...)) -> Dict[str, Any]:
+def graph_network_paper(
+    doi: str = Query(...),
+    journal_id: str = Query(default=DEFAULT_JOURNAL_ID),
+) -> Dict[str, Any]:
     try:
-        data = get_bot().neo4j.paper_network(doi=doi)
+        data = get_bot(journal_id).neo4j.paper_network(doi=doi)
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
     if not data.get("paper"):
@@ -235,9 +284,10 @@ def graph_network_paper(doi: str = Query(...)) -> Dict[str, Any]:
 def graph_network_keyword(
     keyword: str = Query(...),
     limit: int = Query(default=20, ge=1, le=100),
+    journal_id: str = Query(default=DEFAULT_JOURNAL_ID),
 ) -> Dict[str, Any]:
     try:
-        data = get_bot().neo4j.keyword_network(keyword=keyword, limit=limit)
+        data = get_bot(journal_id).neo4j.keyword_network(keyword=keyword, limit=limit)
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
     if not data.get("keyword"):
@@ -249,9 +299,10 @@ def graph_network_keyword(
 def graph_network_institution(
     name: str = Query(...),
     limit: int = Query(default=20, ge=1, le=100),
+    journal_id: str = Query(default=DEFAULT_JOURNAL_ID),
 ) -> Dict[str, Any]:
     try:
-        data = get_bot().neo4j.institution_network(name=name, limit=limit)
+        data = get_bot(journal_id).neo4j.institution_network(name=name, limit=limit)
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
     if not data.get("institution"):

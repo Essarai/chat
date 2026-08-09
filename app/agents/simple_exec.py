@@ -9,6 +9,7 @@ from app.agents.specialists.kg_agent import run_kg_agent
 from app.agents.specialists.rag_agent import run_rag_agent
 from app.agents.specialists.sql_agent import run_sql_agent
 from app.agents.state import JournalState
+from app.config import bind_corpus
 
 
 def _summarize(source: str, data: Dict[str, Any], limit: int = 800) -> str:
@@ -68,6 +69,10 @@ def simple_exec_node(state: JournalState) -> Dict[str, Any]:
     if route.get("complexity") != "simple":
         return {"stage": "retrieving"}
 
+    journal_id = state.get("journal_id")
+    if journal_id:
+        bind_corpus(journal_id)
+
     source = route.get("suggested_source") or "rag"
     question = state.get("question") or ""
     entities = state.get("entities") or {}
@@ -78,7 +83,7 @@ def simple_exec_node(state: JournalState) -> Dict[str, Any]:
 
     try:
         if source == "sql":
-            data = run_sql_agent(question, entities, plan)
+            data = run_sql_agent(question, entities, plan, journal_id=journal_id)
             updates["sql_evidence"] = data
             op = ",".join(plan.get("sql_ops") or ["legacy"])
         elif source == "kg":
@@ -87,6 +92,7 @@ def simple_exec_node(state: JournalState) -> Dict[str, Any]:
                 entities,
                 (entities.get("dois") or []),
                 plan,
+                journal_id=journal_id,
             )
             updates["kg_evidence"] = data
             op = ",".join(plan.get("kg_ops") or ["auto"])
@@ -97,6 +103,7 @@ def simple_exec_node(state: JournalState) -> Dict[str, Any]:
                 queries=plan.get("rag_queries") or [question],
                 year_start=plan.get("year_start") or entities.get("year_start"),
                 year_end=plan.get("year_end") or entities.get("year_end"),
+                journal_id=journal_id,
             )
             updates["rag_evidence"] = data
             ents = dict(entities)

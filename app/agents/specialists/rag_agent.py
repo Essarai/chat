@@ -32,6 +32,7 @@ def run_rag_agent(
     queries: Optional[List[str]] = None,
     year_start: Optional[int] = None,
     year_end: Optional[int] = None,
+    journal_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     result = rag_capability.invoke(
         "semantic_search",
@@ -40,6 +41,7 @@ def run_rag_agent(
         top_k=top_k,
         year_start=year_start,
         year_end=year_end,
+        journal_id=journal_id,
     )
     if not result.get("ok"):
         return {
@@ -75,6 +77,7 @@ def rag_agent_node(state: JournalState) -> Dict[str, Any]:
             queries=queries or None,
             year_start=y0,
             year_end=y1,
+            journal_id=state.get("journal_id"),
         )
         entities = dict(state.get("entities") or {})
         entities["dois"] = [h.get("doi") for h in data.get("hits") or [] if h.get("doi")]
