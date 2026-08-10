@@ -1,4 +1,4 @@
-/* Clean white layout — key info only */
+/* Clean white Google-style layout */
 :root {
   --ink: #202124;
   --muted: #5f6368;
@@ -67,17 +67,10 @@ body {
   min-width: 0;
 }
 
-.brand {
-  font-size: 0.95rem;
-  font-weight: 500;
-  color: var(--ink);
-  white-space: nowrap;
-}
-
 .journal-switch select {
   appearance: none;
   -webkit-appearance: none;
-  max-width: min(52vw, 26rem);
+  max-width: min(70vw, 28rem);
   border: 0;
   background: transparent
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%235f6368' d='M1.4 1.5L6 6.1l4.6-4.6'/%3E%3C/svg%3E")
@@ -142,7 +135,7 @@ body {
 }
 
 main {
-  max-width: 760px;
+  max-width: 1180px;
   margin: 0 auto;
   padding: 0 1.25rem 1.5rem;
 }
@@ -205,6 +198,145 @@ button:focus-visible {
 }
 
 /* —— Ask —— */
+.chat-layout {
+  display: grid;
+  grid-template-columns: 238px minmax(0, 760px);
+  justify-content: center;
+  gap: 2rem;
+}
+
+.history-rail {
+  height: calc(100vh - var(--header-h));
+  overflow: hidden;
+  padding: 1.35rem 0.2rem 1.25rem 0;
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+}
+
+.history-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0 1rem 1rem 0.15rem;
+}
+
+.history-eyebrow {
+  display: block;
+  color: var(--muted);
+  font-size: 0.68rem;
+  letter-spacing: 0.12em;
+}
+
+.history-head h2 {
+  margin: 0.05rem 0 0;
+  font-size: 1rem;
+  line-height: 1.35;
+  font-weight: 600;
+}
+
+button.history-new {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  flex: 0 0 auto;
+  padding: 0.3rem 0.45rem;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--accent);
+  font-size: 0.76rem;
+  font-weight: 500;
+}
+
+button.history-new:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+
+.history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 0.7rem 0 0;
+  overflow-y: auto;
+}
+
+.history-list li {
+  position: relative;
+  margin: 0;
+  padding: 0;
+}
+
+.history-list li:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: 0.82rem;
+  top: 2rem;
+  bottom: -0.35rem;
+  width: 1px;
+  background: var(--line);
+}
+
+button.history-item {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 1.65rem minmax(0, 1fr);
+  align-items: start;
+  gap: 0.45rem;
+  width: 100%;
+  padding: 0.55rem 0.4rem 0.55rem 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  text-align: left;
+  font-weight: 400;
+}
+
+button.history-item:hover:not(:disabled) {
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.history-index {
+  display: grid;
+  place-items: center;
+  width: 1.65rem;
+  height: 1.65rem;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.history-item.is-current .history-index {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.history-item.is-current .history-question {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.history-question {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 1.4;
+  font-size: 0.82rem;
+}
+
+.history-empty {
+  margin: 0.2rem 1rem 0 0.15rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+
 .chat-pane {
   display: flex;
   flex-direction: column;
@@ -222,10 +354,11 @@ button:focus-visible {
 }
 
 .messages:empty::before {
-  content: "向当前期刊提问";
+  content: "问点什么？";
   margin: auto;
   color: var(--muted);
-  font-size: 1.05rem;
+  font-size: 1.35rem;
+  font-weight: 400;
 }
 
 .bubble {
@@ -236,12 +369,18 @@ button:focus-visible {
 }
 
 .bubble.user {
+  position: relative;
   align-self: flex-end;
   background: var(--accent-soft);
   color: var(--ink);
   padding: 0.7rem 0.95rem;
+  padding-right: 2.4rem;
   border-radius: 16px 16px 4px 16px;
   max-width: min(520px, 90%);
+}
+
+.bubble.user.is-located {
+  box-shadow: 0 0 0 3px rgba(26, 115, 232, 0.18);
 }
 
 .bubble.bot {
@@ -390,6 +529,36 @@ button:focus-visible {
   background: var(--bg);
 }
 
+.bubble .bubble-actions {
+  position: absolute;
+  top: 0.45rem;
+  right: 0.45rem;
+  display: flex;
+  gap: 0.15rem;
+}
+
+.bubble .bubble-actions button {
+  background: transparent;
+  color: var(--muted);
+  border: 0;
+  padding: 0.15rem 0.35rem;
+  font-size: 0.75rem;
+  font-weight: 400;
+  border-radius: 4px;
+  line-height: 1.2;
+}
+
+.bubble .bubble-actions button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.7);
+  color: var(--accent);
+}
+
+.bubble.bot .partial-note {
+  margin-top: 0.45rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
 .ask-form {
   display: grid;
   grid-template-columns: 1fr auto auto;
@@ -400,6 +569,30 @@ button:focus-visible {
   padding: 0.35rem 0.4rem 0.35rem 1.05rem;
   box-shadow: var(--shadow);
   background: #fff;
+}
+
+.ask-form.is-streaming {
+  grid-template-columns: 1fr auto;
+}
+
+.ask-form.is-streaming #ask-btn,
+.ask-form.is-streaming #reset-btn {
+  display: none;
+}
+
+.ask-form:not(.is-streaming) #stop-btn {
+  display: none !important;
+}
+
+.ask-form #stop-btn {
+  border-radius: 999px;
+  padding: 0.5rem 0.9rem;
+  color: #d93025;
+}
+
+.ask-form #stop-btn:hover:not(:disabled) {
+  background: #fce8e6;
+  color: #c5221f;
 }
 
 .ask-form:focus-within {
@@ -427,42 +620,6 @@ button:focus-visible {
 .ask-form .ghost {
   border-radius: 999px;
   padding: 0.5rem 0.7rem;
-}
-
-.presets {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.35rem 1rem;
-  margin-top: 0.7rem;
-  padding: 0 0.35rem;
-  min-height: 1.4em;
-}
-
-.presets[hidden] {
-  display: none !important;
-}
-
-.presets .presets-label {
-  color: var(--muted);
-  font-size: 0.875rem;
-}
-
-.presets button {
-  background: transparent;
-  color: var(--accent);
-  border: 0;
-  padding: 0;
-  font-size: 0.9rem;
-  font-weight: 400;
-  border-radius: 0;
-  box-shadow: none;
-}
-
-.presets button:hover:not(:disabled) {
-  background: transparent;
-  text-decoration: underline;
-  color: var(--accent-hover);
 }
 
 /* —— Trends / Graph —— */
@@ -734,12 +891,84 @@ button.tiny:hover:not(:disabled) {
     padding: 0 0.85rem 1rem;
   }
 
+  .chat-layout {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .history-rail {
+    height: auto;
+    max-height: none;
+    padding: 0.65rem 0 0.35rem;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .history-head {
+    align-items: center;
+    padding: 0 0 0.4rem;
+  }
+
+  .history-head h2,
+  .history-eyebrow,
+  .history-empty {
+    display: none;
+  }
+
+  .history-list {
+    display: flex;
+    gap: 0.4rem;
+    overflow-x: auto;
+    padding: 0 0 0.15rem;
+  }
+
+  .history-list li {
+    flex: 0 0 auto;
+  }
+
+  .history-list li::after {
+    display: none;
+  }
+
+  button.history-item {
+    display: flex;
+    width: auto;
+    max-width: 12rem;
+    padding: 0.35rem 0.55rem;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--bg);
+  }
+
+  .history-index {
+    width: 1.35rem;
+    height: 1.35rem;
+    flex: 0 0 auto;
+  }
+
+  .history-question {
+    display: block;
+    max-width: 8rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .chat-pane {
+    height: calc(100vh - var(--header-h) - 4.2rem);
+  }
+
   .ask-form {
     grid-template-columns: 1fr auto;
   }
 
-  .ask-form .ghost {
+  .ask-form:not(.is-streaming) #reset-btn {
     display: none;
+  }
+
+  .ask-form.is-streaming #stop-btn {
+    display: inline-flex !important;
   }
 
   .graph-toolbar {

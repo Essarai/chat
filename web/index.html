@@ -3,15 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="asset-version" content="20260808a" />
-    <title>期刊知识助手</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260808a" />
-    <link rel="stylesheet" href="/static/vendor/vis-network.min.css?v=20260808a" />
+    <meta name="asset-version" content="20260810-history-1" />
+    <title>知识服务Agent</title>
+    <link rel="stylesheet" href="/static/styles.css?v=20260810-history-1" />
+    <link rel="stylesheet" href="/static/vendor/vis-network.min.css?v=20260809c" />
   </head>
   <body>
     <header class="top">
       <label class="journal-switch">
-        <span class="brand">知识助手</span>
+        <span class="sr-only">选择期刊</span>
         <select id="journal-select" aria-label="选择期刊">
           <option value="ZDXBNXB" selected>
             浙江大学学报（农业与生命科学版）
@@ -30,22 +30,39 @@
 
     <main>
       <section id="panel-ask" class="panel is-active" role="tabpanel">
-        <div class="chat-pane">
-          <div id="messages" class="messages" aria-live="polite"></div>
-          <div class="composer">
-            <form id="ask-form" class="ask-form">
-              <input
-                id="question"
-                name="question"
-                type="text"
-                placeholder="输入问题"
-                autocomplete="off"
-                required
-              />
-              <button type="submit" id="ask-btn">发送</button>
-              <button type="button" id="reset-btn" class="ghost">清空</button>
-            </form>
-            <div id="presets" class="presets" aria-label="示例问题"></div>
+        <div class="chat-layout">
+          <aside class="history-rail" aria-label="当前对话历史">
+            <div class="history-head">
+              <div>
+                <span class="history-eyebrow">当前期刊</span>
+                <h2>对话记录</h2>
+              </div>
+              <button type="button" id="new-chat-btn" class="history-new" title="开始新对话">
+                <span aria-hidden="true">＋</span><span>新对话</span>
+              </button>
+            </div>
+            <ol id="history-list" class="history-list"></ol>
+            <p id="history-empty" class="history-empty">提问后，问题会按顺序出现在这里。</p>
+          </aside>
+          <div class="chat-pane">
+            <div id="messages" class="messages" aria-live="polite"></div>
+            <div class="composer">
+              <form id="ask-form" class="ask-form">
+                <input
+                  id="question"
+                  name="question"
+                  type="text"
+                  placeholder="近5年发文量前十的作者有哪些？"
+                  autocomplete="off"
+                  required
+                />
+                <button type="submit" id="ask-btn">发送</button>
+                <button type="button" id="stop-btn" class="ghost stop" hidden>
+                  暂停
+                </button>
+                <button type="button" id="reset-btn" class="ghost">清空</button>
+              </form>
+            </div>
           </div>
         </div>
       </section>
@@ -93,7 +110,7 @@
       </section>
     </main>
 
-    <script src="/static/vendor/vis-network.min.js?v=20260808a"></script>
-    <script src="/static/app.js?v=20260808a"></script>
+    <script src="/static/vendor/vis-network.min.js?v=20260809c"></script>
+    <script src="/static/app.js?v=20260810-history-1"></script>
   </body>
 </html>

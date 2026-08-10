@@ -37,7 +37,7 @@ class MiniMaxChat:
         messages: List[Dict[str, str]],
         temperature: float = 0.3,
         max_tokens: int = 8192,
-        retries: int = 4,
+        retries: int = 2,
     ) -> str:
         if not self.settings.minimax_api_key:
             raise RuntimeError("MINIMAX_API_KEY is not set")
@@ -62,7 +62,9 @@ class MiniMaxChat:
                     headers=headers,
                     method="POST",
                 )
-                with urllib.request.urlopen(req, timeout=180) as resp:
+                # Two understanding attempts, including backoff, stay near 30s total.
+                timeout = 14 if max_tokens <= 1200 else 90
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
                     data = json.loads(resp.read().decode("utf-8"))
 
                 # OpenAI-compatible shape
@@ -83,7 +85,12 @@ class MiniMaxChat:
                 raise RuntimeError(f"Unexpected chat response: {list(data.keys())}")
             except Exception as e:
                 last_err = e
-                time.sleep(min(2**attempt, 15))
+                retryable = isinstance(e, (TimeoutError, urllib.error.URLError))
+                if isinstance(e, urllib.error.HTTPError):
+                    retryable = e.code == 429 or e.code >= 500
+                if not retryable or attempt + 1 >= retries:
+                    break
+                time.sleep(1)
         raise RuntimeError(f"chat failed: {last_err}")
 
     def chat_stream(
@@ -110,7 +117,7 @@ class MiniMaxChat:
             headers=self._headers(),
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=300) as resp:
+        with urllib.request.urlopen(req, timeout=90) as resp:
             while True:
                 raw = resp.readline()
                 if not raw:

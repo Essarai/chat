@@ -69,6 +69,7 @@ def collect_allowed_numbers(state: Dict[str, Any]) -> Set[str]:
 
     walk(state.get("sql_evidence") or {})
     walk(state.get("kg_evidence") or {})
+    walk(state.get("operation_results") or [])
     # year window bounds always allowed
     y0, y1 = _year_window(state)
     add(y0)
@@ -99,6 +100,9 @@ def collect_allowed_papers(state: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
         "keyword_authors",
         "journal_overview",
         "top_teams",
+        "authors_papers",
+        "resultset_papers",
+        "clarification",
     }
     author_scoped = task in {"author_profile", "author"} or sql.get("scope") == "author"
     exclude_rag = (
@@ -149,6 +153,23 @@ def collect_allowed_papers(state: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     for a in sql.get("authors") or []:
         if isinstance(a, dict):
             for p in a.get("papers") or []:
+                add_paper(p.get("doi"), p.get("title_zh") or p.get("title"), p.get("year"))
+
+    # Canonical multi-operation evidence may be namespaced instead of flattened.
+    for result in state.get("operation_results") or []:
+        data = result.get("data") or {}
+        for p in data.get("papers") or data.get("recent_papers") or []:
+            add_paper(p.get("doi"), p.get("title_zh") or p.get("title"), p.get("year"))
+        for direction in data.get("directions") or []:
+            for p in direction.get("papers") or []:
+                add_paper(p.get("doi"), p.get("title_zh") or p.get("title"), p.get("year"))
+        for author_row in data.get("authors") or []:
+            if not isinstance(author_row, dict):
+                continue
+            for p in author_row.get("papers") or []:
+                add_paper(p.get("doi"), p.get("title_zh") or p.get("title"), p.get("year"))
+        for period in data.get("periods") or []:
+            for p in period.get("papers") or []:
                 add_paper(p.get("doi"), p.get("title_zh") or p.get("title"), p.get("year"))
 
     # Author / SQL-only tasks: do not admit RAG or unrelated KG keyword papers.

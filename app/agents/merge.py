@@ -355,8 +355,15 @@ def _format_sql(data: Dict[str, Any]) -> str:
 
     if data.get("scope") == "author":
         a = data.get("author") or {}
+        name = a.get("name_zh") or data.get("author_name") or "（未知）"
+        if not a or data.get("found") is False:
+            return (
+                f"[SQL]【作者个人统计】未找到作者「{name}」。"
+                "本刊库无此人记录；禁止编造其论文/DOI/合作者；"
+                "应明确回答：库中无发文记录。"
+            )
         lines = [
-            f"[SQL]【作者个人统计，非全刊】作者: {a.get('name_zh') or data.get('author_name')} "
+            f"[SQL]【作者个人统计，非全刊】作者: {name} "
             f"(id={a.get('author_id')})",
             f"本刊发文总量: {data.get('total_papers')} 篇 "
             f"(年份跨度 {data.get('year_min')}-{data.get('year_max')})",

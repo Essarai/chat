@@ -39,6 +39,8 @@ def _evidence_enough(source: str, data: Dict[str, Any]) -> bool:
             "submission_fit",
             "top_institutions",
             "top_authors",
+            "authors_papers",
+            "clarification",
             "topic_stats",
             "top_teams",
         }:
@@ -54,7 +56,8 @@ def _evidence_enough(source: str, data: Dict[str, Any]) -> bool:
             return True
         if data.get("institutions"):
             return True
-        if data.get("scope") == "author" and data.get("author"):
+        if data.get("scope") == "author":
+            # Found or not — definitive for author questions; do not escalate to RAG
             return True
         if data.get("scope") == "keyword_authors" and data.get("authors") is not None:
             return True
@@ -93,7 +96,16 @@ def simple_exec_node(state: JournalState) -> Dict[str, Any]:
     updates: Dict[str, Any] = {"stage": "retrieving", "intents": [source]}
 
     try:
-        if source == "sql":
+        if plan.get("task") == "clarification":
+            data = {
+                "scope": "clarification",
+                "task": "clarification",
+                "message": plan.get("focus") or "请补充需要查询的对象。",
+                "source": "conversation",
+            }
+            updates["sql_evidence"] = data
+            op = "clarification"
+        elif source == "sql":
             data = run_sql_agent(question, entities, plan, journal_id=journal_id)
             updates["sql_evidence"] = data
             op = ",".join(plan.get("sql_ops") or ["legacy"])
@@ -136,7 +148,21 @@ def simple_exec_node(state: JournalState) -> Dict[str, Any]:
         }
     )
 
-    enough = _evidence_enough(source, data if isinstance(data, dict) else {})
+    # QueryPlan operations, not payload shape, are the evidence contract.
+    from app.agents.coverage import assess_operations
+
+    preview_state: JournalState = {**state, **updates}  # type: ignore
+    preview_state["query_plan"] = plan
+    preview = assess_operations(preview_state)
+    updates.update({
+        "operation_results": preview.get("operation_results") or [],
+        "coverage_report": preview.get("coverage_report") or {},
+        "result_set": preview.get("result_set") or {},
+    })
+    op_results = preview.get("operation_results") or []
+    # partial/unsupported results are final evidence states and go to the
+    # controlled synthesizer. Only execution errors warrant another source.
+    enough = bool(op_results) and not any(r.get("status") == "error" for r in op_results)
     if not enough:
         route["escalated"] = True
         route["complexity"] = "complex"

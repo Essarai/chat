@@ -19,6 +19,13 @@ from app.config import bind_corpus
 GENE_EDIT_KWS = ["基因编辑", "CRISPR", "基因组编辑", "基因敲除"]
 
 
+def _normalize_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
+    """Ensure every downstream capability receives the same plan contract."""
+    from app.agents.operation_contracts import normalize_query_plan
+
+    return normalize_query_plan(plan)
+
+
 def _years(question: str, entities: Dict[str, Any], default_n: Optional[int] = None):
     q = question or ""
     # Prefer shared extractor (digits + 近十年/近五年 等中文数字)
@@ -137,6 +144,17 @@ def extract_node(state: JournalState) -> Dict[str, Any]:
     if state.get("journal_id"):
         bind_corpus(state.get("journal_id"))
     question = state.get("question") or ""
+    locked = state.get("query_plan") or {}
+    if locked.get("locked"):
+        entities = dict(state.get("entities") or {})
+        entities.update(
+            {
+                "year_start": locked.get("year_start"),
+                "year_end": locked.get("year_end"),
+                "keywords": list(locked.get("keywords") or []),
+            }
+        )
+        return {"entities": entities, "stage": "extracted"}
     prior = (state.get("entities") or {}).get("dois") or []
     draft = regex_extract(question, prior)
     try:
@@ -185,7 +203,7 @@ def _complex_features(question: str, entities: Dict[str, Any]) -> List[str]:
         hits.append("topic_evolution_multi")
     # domain topic evolution, e.g. 「水稻领域研究主题的发展变化」
     # Skip when asking about one author's theme change.
-    if re.search(r"(研究)?主题.*(发展|演变|变化)|(发展|演变).*主题", q) and not (
+    if re.search(r"(?:研究|期刊)?主题.*(?:发展|演变|变化|变迁)|(?:发展|演变|变化|变迁).*主题", q) and not (
         entities.get("author_name") and re.search(r"作者|轨迹|首次发表", q)
     ):
         hits.append("topic_evolution_multi")
@@ -238,7 +256,7 @@ def _simple_match(
 
     # Hotspot / theme evolution → compare windows
     if re.search(
-        r"热点演变|主题差异|研究主题.*(?:差异|变化)|前\d+年和后\d+年|"
+        r"热点演变|主题差异|(?:研究|期刊)?主题.*(?:差异|变化|演变|变迁)|前\d+年和后\d+年|"
         r"从[\u4e00-\u9fff]{2,8}到[\u4e00-\u9fff]{2,8}的变化|演变过程",
         q,
     ):
@@ -669,7 +687,8 @@ def _simple_match(
         entities.get("author_name")
         and not entities.get("author_name_b")
         and re.search(
-            r"发文|发表|论文|概况|情况|合作|机构|统计|基金|轨迹|主题|伙伴|团队",
+            r"发文|发表|论文|概况|情况|合作|机构|统计|基金|轨迹|主题|伙伴|团队|"
+            r"有没有|是否有|有发文|在平台",
             q,
         )
         and not re.search(r"发文(?:量|数量)?最多的机构|机构.*最多|最多的机构", q)
@@ -890,6 +909,32 @@ def router_node(state: JournalState) -> Dict[str, Any]:
     entities = dict(state.get("entities") or {})
     intent = dict(state.get("intent") or {})
 
+    locked_plan = dict(state.get("query_plan") or {})
+    if locked_plan.get("locked"):
+        from app.agents.operation_contracts import normalize_query_plan
+        locked_plan = normalize_query_plan(locked_plan, question, intent)
+        sources = list(locked_plan.get("sources") or ["sql"])
+        plan_source = locked_plan.get("plan_source") or "conversation"
+        reason = f"{plan_source}: locked query plan"
+        route = {
+            "complexity": locked_plan.get("complexity") or "simple",
+            "suggested_source": sources[0] if sources else "sql",
+            "reason": reason,
+            "escalated": False,
+            "plan_source": plan_source,
+        }
+        return {
+            "route": route,
+            "query_plan": locked_plan,
+            "entities": entities,
+            "intents": sources,
+            "route_reason": reason,
+            "stage": "routed",
+            "goal": locked_plan.get("focus") or question,
+            "evidence_bundle": list(state.get("evidence_bundle") or []),
+            "react_trace": list(state.get("react_trace") or []),
+        }
+
     schema_route = _route_from_schema(question, intent, entities)
     if schema_route:
         route = schema_route
@@ -900,6 +945,8 @@ def router_node(state: JournalState) -> Dict[str, Any]:
         plan_tag = "regex"
 
     plan = route.pop("query_plan", None) or state.get("query_plan") or {}
+    from app.agents.operation_contracts import normalize_query_plan
+    plan = normalize_query_plan(plan, question, intent)
     if route.get("complexity") == "simple" and plan:
         # align years into entities
         if plan.get("year_start") is not None:

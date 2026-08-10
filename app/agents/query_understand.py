@@ -85,6 +85,7 @@ Schema（封闭枚举）:
 {{
   "entity": "paper|author|institution|topic|journal",
   "operation": "search|rank|trend|compare|summarize|recommend|profile|coverage",
+  "requested_operations": [{{"type": "规范操作名", "required": true}}],
   "goal": "research_analysis|submission_fit|inventory|refuse",
   "sources": ["sql","kg","rag"] 可多选，通常优先 sql,
   "topic": ["短主题词，不要整句"],
@@ -103,13 +104,14 @@ Schema（封闭枚举）:
 1. 发文量前十作者 → entity=author, operation=rank, metric=publication_count。
 2. 某主题（如水稻）相关前十作者 → entity=author, operation=rank, topic=["水稻"]。
 3. 某机构相关作者/代表成果 → entity=institution, operation=summarize或profile, 填 institution。
-4. 发文趋势/热门关键词 → entity=journal, operation=trend；若问热词可 sources=["sql"]。
+4. 发文趋势 → requested_operations 至少含 yearly_counts、yoy_growth；热门关键词 → top_keywords，问增长/新兴时再含 keyword_growth。不要把「热门关键词」填入 topic。
 5. 适合投稿/是否适合发某主题 → goal=submission_fit, operation=coverage, entity=topic, 填 topic。
 6. 高被引/被引次数 → goal=refuse, legacy_task=unsupported_citations。
 7. author_name 必须是真实人名；宏观期刊问题不要填作者。
 8. topic 只要核心词（基因编辑、数字经济），不要「发文量」「有哪些」。
 9. 「近五年/近十年」填 time_range.last_n 或换算 start/end。
 10. confidence：槽位清晰≥0.8；模糊≤0.5。
+11. 复合问题必须拆成多个 requested_operations。例如作者排名及其论文 → top_authors、papers_for_authors；作者论文及研究主题 → author_profile、author_topic_summary。
 
 用户问题：{question}
 正则草稿：{json.dumps(draft, ensure_ascii=False)}
@@ -166,6 +168,10 @@ def heuristic_intent(question: str, draft: Dict[str, Any]) -> Dict[str, Any]:
         raw.update({"entity": "journal", "operation": "trend", "confidence": 0.7})
     elif re.search(r"作者", q) and re.search(r"前|排名|发文量", q):
         raw.update({"entity": "author", "operation": "rank", "confidence": 0.7})
+    elif draft.get("author_name") and draft.get("author_name_b"):
+        raw.update({"entity": "author", "operation": "search", "confidence": 0.88})
+    elif re.search(r"合作最紧密|核心研究团队|核心作者网络", q):
+        raw.update({"entity": "author", "operation": "summarize", "confidence": 0.75})
     elif draft.get("institution") and re.search(
         r"作者|代表(性)?成果|代表论文|学者", q
     ):
@@ -210,6 +216,12 @@ def heuristic_intent(question: str, draft: Dict[str, Any]) -> Dict[str, Any]:
 def query_understand_node(state: JournalState) -> Dict[str, Any]:
     question = state.get("question") or ""
     draft = dict(state.get("entities") or {})
+    if (state.get("query_plan") or {}).get("locked"):
+        return {
+            "intent": dict(state.get("turn_intent") or {}),
+            "entities": draft,
+            "stage": "understood",
+        }
     if not _qu_enabled():
         intent = empty_intent()
         intent["confidence"] = 0.0

@@ -39,10 +39,19 @@ NAME_LOOSE_RE = re.compile(
     r"([一-龥]{2,4})(?:老师|教授)?(?:有合作关系|有合作|的合作|合作关系|合作过|合著|共著)"
 )
 AUTHOR_PREFIX_RE = re.compile(r"(?:作者|老师|教授)\s*([一-龥A-Za-z·]{2,12})")
-# 徐建明发文情况 / 朱军的发文统计
+# 刘建臻 在平台有发文吗 / 徐建明在本刊有没有论文（要求姓名与后续之间有间隔或“在/于”）
+AUTHOR_HAS_PAPERS_RE = re.compile(
+    r"([一-龥A-Za-z·]{2,4})(?:老师|教授|研究员)?"
+    r"(?:\s+|(?=在|于))"
+    r"(?:在|于)?(?:本刊|该刊|该期刊|期刊|学报|平台)?(?:上|中)?"
+    r"(?:有没有|是否有|有无|有|是否)?"
+    r"(?:发过文|发文|发表过|发表|论文)"
+)
+# 徐建明发文情况 / 朱军的发文统计（避免匹配「在平台有发文」）
 AUTHOR_PROFILE_RE = re.compile(
     r"([一-龥A-Za-z·]{2,4})(?:老师|教授|研究员)?(?:的)?"
-    r"(?:全部发文|发文情况|发文概况|发文统计|发文趋势|论文情况|科研情况|发文)"
+    r"(?:全部发文|发文情况|发文概况|发文统计|发文趋势|论文情况|科研情况|"
+    r"发文量|发文数)"
 )
 # 徐建明在该期刊发表过哪些论文 / 徐建明的论文有哪些
 AUTHOR_PAPERS_RE = re.compile(
@@ -152,6 +161,11 @@ _BAD_AUTHOR_NAMES = {
     "发文量",
     "发文数",
     "最多的",
+    "平台",
+    "在平台",
+    "本刊",
+    "该刊",
+    "学报",
 }
 
 
@@ -162,7 +176,8 @@ def _looks_like_person_name(name: str) -> bool:
         return False
     # reject abstract nouns commonly glued before 机构/研究
     if re.search(
-        r"(研究|机构|单位|方向|趋势|历程|阶段|学科|期刊|论文|作者|核心|代表|表性|演变|发展|变化|主题|领域|团队)",
+        r"(研究|机构|单位|方向|趋势|历程|阶段|学科|期刊|论文|作者|核心|代表|表性|"
+        r"演变|发展|变化|主题|领域|团队|全部|平台|情况|统计|数量)",
         name,
     ):
         return False
@@ -202,9 +217,10 @@ def extract_author_name(question: str) -> Optional[str]:
         AUTHOR_TEAM_RE,
         AUTHOR_PAPERS_RE,
         AUTHOR_PAPERS_LOOSE_RE,
+        AUTHOR_PROFILE_RE,
+        AUTHOR_HAS_PAPERS_RE,
         NAME_WITH_PREP_RE,
         AUTHOR_COLLAB_INST_RE,
-        AUTHOR_PROFILE_RE,
         NAME_LOOSE_RE,
         NAME_RE,
         AUTHOR_PREFIX_RE,

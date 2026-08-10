@@ -6,14 +6,22 @@
   const askForm = $("#ask-form");
   const questionEl = $("#question");
   const askBtn = $("#ask-btn");
+  const stopBtn = $("#stop-btn");
   const resetBtn = $("#reset-btn");
+  const newChatBtn = $("#new-chat-btn");
+  const historyListEl = $("#history-list");
+  const historyEmptyEl = $("#history-empty");
   const journalSelect = $("#journal-select");
   const graphForm = $("#graph-form");
   const graphCanvas = $("#graph-canvas");
   const graphLegend = $("#graph-legend");
   const graphStatus = $("#graph-status");
 
-  let needsReset = false;
+  const MAX_TURNS = 10; // keep 10 Q&A pairs
+  /** @type {{q:string,a:string,citations:any[],partial?:boolean}[]} */
+  let turns = [];
+  let askAbort = null;
+  let streaming = false;
   let trendsLoaded = false;
   let graphAnim = null;
   let graphNetwork = null;
@@ -36,19 +44,6 @@
     return `${path}${sep}journal_id=${encodeURIComponent(currentJournalId())}`;
   }
 
-  const PRESETS_BY_JOURNAL = {
-    ZDXBNXB: [
-      { q: "徐建明全部发文", label: "作者发文" },
-      { q: "徐建明合作的作者所属机构情况", label: "合作机构" },
-      { q: "徐建明和施加春合作的发文有哪些", label: "合著论文" },
-    ],
-    ZDXBRWB: [
-      { q: "近十年发文趋势和热门关键词？", label: "发文趋势" },
-      { q: "本刊主要研究方向有哪些？", label: "研究方向" },
-      { q: "浙江大学相关作者有哪些代表性成果？", label: "代表成果" },
-    ],
-  };
-
   const GRAPH_DEFAULTS_BY_JOURNAL = {
     ZDXBNXB: {
       author: "朱军",
@@ -63,10 +58,6 @@
       paper: "",
     },
   };
-
-  function getPresets() {
-    return PRESETS_BY_JOURNAL[currentJournalId()] || PRESETS_BY_JOURNAL.ZDXBNXB;
-  }
 
   function getGraphDefaults() {
     return (
@@ -643,13 +634,175 @@
     return `<div class="refs"><ul>${items}</ul></div>`;
   }
 
-  function appendBubble(role, html) {
-    const div = document.createElement("div");
-    div.className = `bubble ${role}`;
-    div.innerHTML = html;
-    messagesEl.appendChild(div);
+  function chatStorageKey() {
+    return `ksa-chat:${currentJournalId()}`;
+  }
+
+  function conversationStorageKey() {
+    return `ksa-conversation:${currentJournalId()}`;
+  }
+
+  function newConversationId() {
+    if (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function") {
+      return globalThis.crypto.randomUUID();
+    }
+    return `conv-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+
+  function conversationId() {
+    try {
+      let value = sessionStorage.getItem(conversationStorageKey());
+      if (!value) {
+        value = newConversationId();
+        sessionStorage.setItem(conversationStorageKey(), value);
+      }
+      return value;
+    } catch (_) {
+      return newConversationId();
+    }
+  }
+
+  function saveConversationId(value) {
+    if (!value) return;
+    try {
+      sessionStorage.setItem(conversationStorageKey(), value);
+    } catch (_) {}
+  }
+
+  function historyPayload() {
+    const items = [];
+    for (const t of turns) {
+      if (t.q) items.push({ role: "user", content: t.q });
+      if (t.a) items.push({ role: "assistant", content: t.a });
+    }
+    return items;
+  }
+
+  function persistTurns() {
+    try {
+      const slim = turns.slice(-MAX_TURNS).map((t) => ({
+        q: t.q,
+        a: t.a || "",
+        citations: t.citations || [],
+        partial: !!t.partial,
+      }));
+      sessionStorage.setItem(chatStorageKey(), JSON.stringify(slim));
+    } catch (_) {
+      /* ignore quota */
+    }
+  }
+
+  function loadTurns() {
+    try {
+      // Chats created by older bundles have text history but no server-side
+      // conversation id/result set. Do not present those turns as follow-up capable.
+      if (!sessionStorage.getItem(conversationStorageKey())) {
+        sessionStorage.removeItem(chatStorageKey());
+        sessionStorage.setItem(conversationStorageKey(), newConversationId());
+        turns = [];
+        return;
+      }
+      const raw = sessionStorage.getItem(chatStorageKey());
+      if (!raw) {
+        turns = [];
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      turns = Array.isArray(parsed) ? parsed.slice(-MAX_TURNS) : [];
+    } catch (_) {
+      turns = [];
+    }
+  }
+
+  function setStreamingUi(on) {
+    streaming = !!on;
+    askForm.classList.toggle("is-streaming", streaming);
+    askBtn.disabled = streaming;
+    if (stopBtn) stopBtn.hidden = !streaming;
+    questionEl.disabled = streaming;
+  }
+
+  function stopAsking() {
+    if (askAbort) {
+      askAbort.abort();
+      askAbort = null;
+    }
+  }
+
+  function renderChat(opts = {}) {
+    const { pendingStatus = "", pendingHtml = "" } = opts;
+    messagesEl.innerHTML = "";
+    turns.forEach((t, idx) => {
+      const user = document.createElement("div");
+      user.className = "bubble user";
+      user.dataset.turnIndex = String(idx);
+      user.innerHTML =
+        `<div class="bubble-text">${escapeHtml(t.q)}</div>` +
+        (streaming
+          ? ""
+          : `<div class="bubble-actions"><button type="button" data-edit="${idx}" title="修改并重新提问">修改</button></div>`);
+      messagesEl.appendChild(user);
+
+      const bot = document.createElement("div");
+      bot.className = "bubble bot";
+      if (t.a) {
+        bot.innerHTML =
+          renderMarkdown(t.a) +
+          formatCitations(t.citations || []) +
+          (t.partial ? `<p class="partial-note">（已暂停，可修改后继续追问）</p>` : "");
+      } else if (pendingStatus && idx === turns.length - 1) {
+        bot.innerHTML = pendingHtml ||
+          `<div class="md"><p class="stream-status">${escapeHtml(pendingStatus)}</p></div>`;
+      } else {
+        bot.innerHTML = `<div class="md"><p class="stream-status">（无回答）</p></div>`;
+      }
+      messagesEl.appendChild(bot);
+    });
+    messagesEl.querySelectorAll("[data-edit]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const i = Number(btn.getAttribute("data-edit"));
+        if (!Number.isFinite(i) || i < 0 || i >= turns.length || streaming) return;
+        const q = turns[i].q || "";
+        turns = turns.slice(0, i);
+        persistTurns();
+        renderChat();
+        questionEl.value = q;
+        questionEl.focus();
+        questionEl.select();
+      });
+    });
+    renderHistory();
     messagesEl.scrollTop = messagesEl.scrollHeight;
-    return div;
+  }
+
+  function renderHistory() {
+    if (!historyListEl) return;
+    historyListEl.innerHTML = "";
+    if (historyEmptyEl) historyEmptyEl.hidden = turns.length > 0;
+    turns.forEach((turn, index) => {
+      const item = document.createElement("li");
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "history-item";
+      if (index === turns.length - 1) {
+        button.classList.add("is-current");
+        button.setAttribute("aria-current", "true");
+      }
+      button.innerHTML =
+        `<span class="history-index">${index + 1}</span>` +
+        `<span class="history-question">${escapeHtml(turn.q || "未命名问题")}</span>`;
+      button.title = turn.q || "未命名问题";
+      button.addEventListener("click", () => {
+        const target = messagesEl.querySelector(`[data-turn-index="${index}"]`);
+        if (!target) return;
+        target.scrollIntoView({ behavior: "smooth", block: "start" });
+        target.classList.remove("is-located");
+        requestAnimationFrame(() => target.classList.add("is-located"));
+        globalThis.setTimeout(() => target.classList.remove("is-located"), 900);
+      });
+      item.appendChild(button);
+      historyListEl.appendChild(item);
+    });
   }
 
   function switchTab(name) {
@@ -667,22 +820,30 @@
 
   async function askQuestion(question) {
     const q = question.trim();
-    if (!q) return;
-    setPresetsVisible(false);
-    appendBubble("user", escapeHtml(q));
+    if (!q || streaming) return;
+
+    // Prior history for this request (before appending current turn)
+    const priorHistory = historyPayload();
+    turns.push({ q, a: "", citations: [], partial: false });
+    if (turns.length > MAX_TURNS) turns = turns.slice(-MAX_TURNS);
     questionEl.value = "";
-    askBtn.disabled = true;
-    const pending = appendBubble("bot", '<div class="md"><p class="stream-status">检索与分析中…</p></div>');
-    const resetFlag = needsReset;
-    needsReset = false;
+    setStreamingUi(true);
+    renderChat({ pendingStatus: "检索与分析中…" });
+
+    const turn = turns[turns.length - 1];
     let acc = "";
     let citations = [];
+    askAbort = new AbortController();
 
-    const paint = (finalAnswer) => {
-      const text = finalAnswer != null ? finalAnswer : acc;
-      pending.innerHTML =
-        renderMarkdown(text || "（无回答）") + formatCitations(citations);
-      messagesEl.scrollTop = messagesEl.scrollHeight;
+    const paintPending = (status) => {
+      turn.a = acc;
+      turn.citations = citations;
+      renderChat({
+        pendingStatus: status || "生成回答中…",
+        pendingHtml: acc
+          ? renderMarkdown(acc) + formatCitations(citations)
+          : undefined,
+      });
     };
 
     try {
@@ -691,9 +852,12 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           question: q,
-          reset: resetFlag,
+          reset: priorHistory.length === 0,
+          history: priorHistory,
           journal_id: currentJournalId(),
+          conversation_id: conversationId(),
         }),
+        signal: askAbort.signal,
       });
       if (!res.ok) {
         let detail = res.statusText;
@@ -727,37 +891,45 @@
             continue;
           }
           if (ev.type === "status") {
-            if (!acc) {
-              pending.innerHTML = `<div class="md"><p class="stream-status">${escapeHtml(
-                ev.message || "处理中…"
-              )}</p></div>`;
-            }
+            if (!acc) paintPending(ev.message || "处理中…");
           } else if (ev.type === "delta") {
             acc += ev.text || "";
-            paint();
+            paintPending();
           } else if (ev.type === "done") {
+            saveConversationId(ev.conversation_id);
             citations = ev.citations || [];
-            paint(ev.answer || acc || "（无回答）");
+            acc = ev.answer || acc || "（无回答）";
+            turn.a = acc;
+            turn.citations = citations;
+            turn.partial = false;
           } else if (ev.type === "error") {
             throw new Error(ev.message || "流式请求失败");
           }
         }
       }
-      if (!acc && !pending.querySelector("strong, p, li, ol, ul")) {
-        pending.textContent = "（无回答）";
+      if (!turn.a) {
+        turn.a = acc || "（无回答）";
+        turn.citations = citations;
       }
     } catch (err) {
-      if (acc) {
-        paint();
-        const note = document.createElement("p");
-        note.className = "stream-error";
-        note.textContent = `（流式中断：${err.message || err}）`;
-        pending.appendChild(note);
+      if (err && err.name === "AbortError") {
+        turn.a = acc || turn.a || "（已暂停）";
+        turn.citations = citations;
+        turn.partial = true;
+      } else if (acc) {
+        turn.a = acc;
+        turn.citations = citations;
+        turn.partial = true;
+        turn.a += `\n\n（流式中断：${err.message || err}）`;
       } else {
-        pending.textContent = `请求失败：${err.message || err}`;
+        turn.a = `请求失败：${err.message || err}`;
+        turn.partial = true;
       }
     } finally {
-      askBtn.disabled = false;
+      askAbort = null;
+      setStreamingUi(false);
+      persistTurns();
+      renderChat();
       questionEl.focus();
     }
   }
@@ -981,29 +1153,19 @@
     }
   }
 
-  function setPresetsVisible(visible) {
-    const el = $("#presets");
-    if (!el) return;
-    el.hidden = !visible;
-  }
-
-  function renderPresets() {
-    const el = $("#presets");
-    if (!el) return;
-    el.innerHTML =
-      `<span class="presets-label">示例</span>` +
-      getPresets().map(
-        (p) =>
-          `<button type="button" data-q="${escapeHtml(p.q)}">${escapeHtml(p.label)}</button>`
-      ).join("");
-    el.querySelectorAll("button").forEach((btn) => {
-      btn.addEventListener("click", () => askQuestion(btn.dataset.q || ""));
-    });
-  }
-
   function showWelcome() {
-    messagesEl.innerHTML = "";
-    setPresetsVisible(true);
+    loadTurns();
+    renderChat();
+  }
+
+  function clearChat() {
+    stopAsking();
+    turns = [];
+    try {
+      sessionStorage.removeItem(chatStorageKey());
+      sessionStorage.setItem(conversationStorageKey(), newConversationId());
+    } catch (_) {}
+    renderChat();
   }
 
   function stopGraph() {
@@ -1489,11 +1651,19 @@
     e.preventDefault();
     askQuestion(questionEl.value);
   });
+  if (stopBtn) {
+    stopBtn.addEventListener("click", () => stopAsking());
+  }
   resetBtn.addEventListener("click", () => {
-    messagesEl.innerHTML = "";
-    needsReset = true;
-    showWelcome();
+    clearChat();
   });
+  if (newChatBtn) {
+    newChatBtn.addEventListener("click", () => {
+      if (streaming) return;
+      clearChat();
+      questionEl.focus();
+    });
+  }
   graphForm.addEventListener("submit", (e) => {
     e.preventDefault();
     loadGraph();
@@ -1514,10 +1684,8 @@
 
   if (journalSelect) {
     journalSelect.addEventListener("change", () => {
-      needsReset = true;
-      messagesEl.innerHTML = "";
+      stopAsking();
       showWelcome();
-      renderPresets();
       trendsLoaded = false;
       selectedYear = null;
       yearlyRowsCache = [];
@@ -1533,7 +1701,6 @@
     });
   }
 
-  renderPresets();
   showWelcome();
   {
     const mode = $("#graph-mode").value;

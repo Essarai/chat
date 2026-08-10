@@ -535,6 +535,45 @@ def analysis_planner_node(state: JournalState) -> Dict[str, Any]:
     entities = dict(state.get("entities") or {})
     route = dict(state.get("route") or {})
     query_plan = dict(state.get("query_plan") or {})
+    canonical_ops = [op for op in query_plan.get("operations") or [] if isinstance(op, dict)]
+    if canonical_ops:
+        analysis = {
+            "subgoals": [
+                {
+                    "id": op.get("id"), "type": op.get("type"),
+                    "desc": f"完成 operation {op.get('type')}",
+                    "needs": [op.get("source") or "sql"], "status": "pending",
+                }
+                for op in canonical_ops
+            ],
+            "answer_shape": "multi_operation" if len(canonical_ops) > 1 else "single_operation",
+            "goal": query_plan.get("focus") or question,
+            "seed_query_hint": {},
+        }
+        sources = set(query_plan.get("sources") or [])
+        if len(sources) > 1:
+            route["complexity"] = "complex"
+            route["suggested_source"] = None
+        return {
+            "analysis_plan": analysis, "goal": analysis["goal"],
+            "query_plan": query_plan, "entities": entities, "route": route,
+            "route_reason": (state.get("route_reason") or "") + f"; operations={len(canonical_ops)}",
+            "stage": "analysis_planned",
+        }
+    if query_plan.get("locked"):
+        analysis = {
+            "subgoals": [],
+            "answer_shape": "inventory",
+            "goal": query_plan.get("focus") or question,
+            "seed_query_hint": {},
+        }
+        return {
+            "analysis_plan": analysis,
+            "query_plan": query_plan,
+            "entities": entities,
+            "route": route,
+            "stage": "planned",
+        }
 
     analysis = plan_analysis(
         question,

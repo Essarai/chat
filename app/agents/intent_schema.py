@@ -57,9 +57,20 @@ _TOPIC_STOP = {
 
 # Meta phrases that look like topics but are question scaffolding
 _META_TOPIC = {
+    "热点",
+    "主题",
+    "领域",
+    "研究领域",
+    "接受文章",
+    "收录领域",
+    "投稿领域",
     "研究方向",
     "数量变化",
     "研究热点",
+    "热门关键词",
+    "热门词",
+    "热词",
+    "关键词",
     "热点演变",
     "研究热点演变",
     "新兴研究方向",
@@ -122,6 +133,7 @@ def empty_intent() -> Dict[str, Any]:
         "confidence": 0.0,
         "legacy_task": None,
         "notes": "",
+        "requested_operations": [],
     }
 
 
@@ -487,6 +499,16 @@ def normalize_intent(
 
     operation = str(raw.get("operation") or "").strip().lower()
     base["operation"] = operation if operation in OPERATIONS else "search"
+
+    requested = raw.get("requested_operations") or []
+    if not isinstance(requested, list):
+        requested = []
+    base["requested_operations"] = [
+        (dict(item) if isinstance(item, dict) else str(item).strip())
+        for item in requested[:12]
+        if (isinstance(item, dict) and item.get("type"))
+        or (not isinstance(item, dict) and str(item).strip())
+    ]
 
     goal = str(raw.get("goal") or "").strip().lower()
     base["goal"] = goal if goal in GOALS else "research_analysis"

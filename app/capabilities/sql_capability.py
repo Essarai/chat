@@ -42,6 +42,12 @@ def _db(journal_id: Optional[str] = None) -> SQLiteRepo:
     return repo
 
 _TOPIC_STOP = {
+    "热点",
+    "研究热点",
+    "主题",
+    "领域",
+    "研究领域",
+    "研究方向",
     "发文",
     "发文量",
     "论文",
@@ -53,6 +59,9 @@ _TOPIC_STOP = {
     "哪些",
     "近五",
     "近5",
+    "热门关键词",
+    "热门词",
+    "热词",
 }
 
 
@@ -207,7 +216,7 @@ def _hotspot_windows(
     ]
 
 
-def execute_plan(
+def _execute_single_plan(
     plan: Dict[str, Any],
     question: str = "",
     entities: Dict[str, Any] | None = None,
@@ -239,6 +248,124 @@ def execute_plan(
         "end_year": y1,
         "source": "sqlite",
     }
+
+    if "keyword_growth" in ops:
+        data = db.keyword_growth(int(plan.get("top_n_directions") or plan.get("top_n") or 20), y0, y1)
+        data["task"] = "keyword_growth"
+        return data
+
+    if "topic_period_compare" in ops:
+        data = db.topic_period_compare(kws, y0, y1, int(plan.get("top_n") or 20))
+        data["task"] = "topic_period_compare"
+        return data
+
+    if "author_direction_evolution" in ops:
+        aid = None
+        ids = plan.get("author_ids") or []
+        if ids:
+            aid = ids[0]
+        data = db.author_direction_evolution(str(author) if author else None, aid, y0, y1)
+        data["task"] = "author_direction_evolution"
+        return data
+
+    if "author_direction_diversity" in ops:
+        data = db.author_direction_diversity(int(plan.get("top_n") or 10), y0, y1)
+        data["task"] = "author_direction_diversity"
+        return data
+
+    if "institution_stability" in ops:
+        data = db.institution_stability(int(plan.get("top_n") or 10), y0, y1)
+        data["task"] = "institution_stability"
+        return data
+
+    if "present_resultset" in ops or task == "resultset_papers":
+        grouped: Dict[str, Dict[str, Any]] = {}
+        order: List[str] = []
+        targets = [t for t in (plan.get("targets") or []) if isinstance(t, dict)]
+        for paper in targets[:100]:
+            aid = str(paper.get("author_id") or "unknown")
+            if aid not in grouped:
+                order.append(aid)
+                grouped[aid] = {
+                    "author_id": aid,
+                    "name_zh": paper.get("author_name") or "上一轮论文",
+                    "papers": [],
+                }
+            grouped[aid]["papers"].append(
+                {
+                    "doi": paper.get("doi"),
+                    "title_zh": paper.get("title"),
+                    "year": paper.get("year"),
+                }
+            )
+        evidence.update(
+            {
+                "task": "authors_papers",
+                "scope": "authors_papers",
+                "authors": [grouped[aid] for aid in order],
+                "total_count": len(targets),
+                "shown_count": min(len(targets), 100),
+                "offset": 0,
+                "next_offset": min(len(targets), 100),
+                "has_more": len(targets) > 100,
+            }
+        )
+        return evidence
+
+    if "papers_for_authors" in ops or task == "authors_papers":
+        author_ids = [str(v).strip() for v in (plan.get("author_ids") or []) if str(v).strip()]
+        grouped = db.papers_for_authors(author_ids, y0, y1)
+        target_names = {
+            str(t.get("id")): t.get("name")
+            for t in (plan.get("targets") or [])
+            if isinstance(t, dict) and t.get("id")
+        }
+        flattened: List[tuple] = []
+        for author in grouped:
+            if not author.get("name_zh"):
+                author["name_zh"] = target_names.get(str(author.get("author_id")))
+            for paper in author.get("papers") or []:
+                flattened.append((author, paper))
+        total = len(flattened)
+        offset = max(0, int(plan.get("offset") or 0))
+        max_items = max(1, min(int(plan.get("max_items") or 100), 100))
+        max_chars = max(1000, min(int(plan.get("max_chars") or 24000), 24000))
+        selected: List[tuple] = []
+        estimated = 0
+        for author, paper in flattened[offset:]:
+            cost = len(str(paper.get("title_zh") or paper.get("title_en") or "")) + len(str(paper.get("doi") or "")) + 120
+            if selected and (len(selected) >= max_items or estimated + cost > max_chars):
+                break
+            selected.append((author, paper))
+            estimated += cost
+        selected_by_author: Dict[str, Dict[str, Any]] = {}
+        order: List[str] = []
+        for author, paper in selected:
+            aid = str(author.get("author_id"))
+            if aid not in selected_by_author:
+                order.append(aid)
+                selected_by_author[aid] = {
+                    "author_id": aid,
+                    "name_zh": author.get("name_zh"),
+                    "name_en": author.get("name_en"),
+                    "papers": [],
+                }
+            selected_by_author[aid]["papers"].append(paper)
+        shown = len(selected)
+        evidence.update(
+            {
+                "task": "authors_papers",
+                "scope": "authors_papers",
+                "authors": [selected_by_author[aid] for aid in order],
+                "author_ids": author_ids,
+                "total_count": total,
+                "shown_count": shown,
+                "offset": offset,
+                "next_offset": offset + shown,
+                "has_more": offset + shown < total,
+            }
+        )
+        return evidence
 
     if "unsupported_citations" in ops or task == "unsupported_citations":
         return {
@@ -387,32 +514,53 @@ def execute_plan(
             data["task"] = "coauthored_papers"
             return data
 
-    if "author_profile" in ops and author:
+    if "author_profile" in ops:
+        if not author:
+            return {
+                "author": None,
+                "author_name": None,
+                "scope": "author",
+                "task": "author_profile",
+                "found": False,
+                "papers": [],
+                "total_papers": 0,
+                "source": "sqlite",
+                "note": "问题未识别到有效作者姓名",
+            }
         profile = db.author_profile(author)
-        if profile.get("author"):
-            evidence = {**profile, "author_name": author, "task": task}
-            q = question or ""
-            # Pair coauthor questions should not expand to full collaborator dumps.
-            if entities.get("author_name_b") and re.search(r"合作|合著|共著", q):
-                return evidence
-            if any(
-                k in q
-                for k in (
-                    "机构",
-                    "单位",
-                    "合作",
-                    "发文",
-                    "概况",
-                    "情况",
-                    "分布",
-                    "轨迹",
-                    "主题",
-                    "首次发表",
-                )
-            ):
-                evidence["collaborator_institutions"] = db.collaborator_institutions(author)
-                evidence["collaborators"] = db.author_collaborators(author, limit=15)
+        if not profile.get("author"):
+            return {
+                **profile,
+                "author_name": author,
+                "task": "author_profile",
+                "found": False,
+                "papers": [],
+                "total_papers": 0,
+                "note": f"本刊库中未找到作者「{author}」",
+            }
+        evidence = {**profile, "author_name": author, "task": task, "found": True}
+        q = question or ""
+        # Pair coauthor questions should not expand to full collaborator dumps.
+        if entities.get("author_name_b") and re.search(r"合作|合著|共著", q):
             return evidence
+        if any(
+            k in q
+            for k in (
+                "机构",
+                "单位",
+                "合作",
+                "发文",
+                "概况",
+                "情况",
+                "分布",
+                "轨迹",
+                "主题",
+                "首次发表",
+            )
+        ):
+            evidence["collaborator_institutions"] = db.collaborator_institutions(author)
+            evidence["collaborators"] = db.author_collaborators(author, limit=15)
+        return evidence
 
     if "authors_by_keyword" in ops or task == "keyword_authors":
         kw = (kws[0] if kws else None) or _pick_keyword(question, entities) or ""
@@ -542,6 +690,78 @@ def execute_plan(
     return evidence
 
 
+def execute_plan(
+    plan: Dict[str, Any],
+    question: str = "",
+    entities: Dict[str, Any] | None = None,
+    db: SQLiteRepo | None = None,
+) -> Dict[str, Any]:
+    """Execute canonical SQL operations without allowing early-return loss.
+
+    Each operation is run against a single-operation legacy adapter.  The
+    aggregate retains namespaced data for coverage/rendering and exposes a
+    backward-compatible top-level view for existing templates.
+    """
+    from app.agents.operation_contracts import normalize_query_plan
+
+    db = db or _db()
+    entities = entities or {}
+    canonical = normalize_query_plan(plan, question)
+    sql_specs = [
+        op for op in canonical.get("operations") or []
+        if isinstance(op, dict) and op.get("source") == "sql"
+        and op.get("type") != "submission_guidance"
+    ]
+    if not sql_specs:
+        return _execute_single_plan(canonical, question, entities, db)
+
+    operation_data: Dict[str, Dict[str, Any]] = {}
+    aggregate: Dict[str, Any] = {
+        "scope": canonical.get("main_task") or canonical.get("task") or "generic",
+        "task": canonical.get("main_task") or canonical.get("task") or "generic",
+        "start_year": canonical.get("year_start"),
+        "end_year": canonical.get("year_end"),
+        "source": "sqlite",
+    }
+    author_ids = list(canonical.get("author_ids") or [])
+    for spec in sql_specs:
+        op_type = str(spec.get("type") or "")
+        run_type = "author_profile" if op_type == "author_topic_summary" else op_type
+        subplan = dict(canonical)
+        subplan["operations"] = []
+        subplan["sql_ops"] = [run_type]
+        subplan["task"] = run_type
+        params = dict(spec.get("params") or {})
+        for key, value in params.items():
+            subplan[key] = value
+        if op_type == "papers_for_authors" and not author_ids:
+            for prior in operation_data.values():
+                for row in prior.get("authors") or []:
+                    aid = row.get("author_id")
+                    if aid and aid not in author_ids:
+                        author_ids.append(aid)
+            subplan["author_ids"] = author_ids
+        try:
+            data = _execute_single_plan(subplan, question, entities, db)
+        except Exception as exc:  # operation-level error, assessed downstream
+            data = {"error": str(exc), "task": op_type, "scope": op_type, "source": "sqlite"}
+        data = dict(data or {})
+        data["operation"] = op_type
+        operation_data[str(spec.get("id") or op_type)] = data
+        for key, value in data.items():
+            if key not in aggregate or aggregate.get(key) in (None, [], {}):
+                aggregate[key] = value
+
+    aggregate["scope"] = canonical.get("main_task") or canonical.get("task") or aggregate.get("scope")
+    aggregate["task"] = canonical.get("main_task") or canonical.get("task") or aggregate.get("task")
+    aggregate["operation_data"] = operation_data
+    if len(operation_data) == 1:
+        only = dict(next(iter(operation_data.values())))
+        only["operation_data"] = operation_data
+        return only
+    return aggregate
+
+
 def run_legacy(
     question: str,
     entities: Dict[str, Any] | None = None,
@@ -576,29 +796,23 @@ def run_legacy(
     if author:
         profile = db.author_profile(author)
         if not profile.get("author"):
-            y0 = entities.get("year_start")
-            y1 = entities.get("year_end")
-            if y0 is None and y1 is None:
-                y0, y1 = extract_year_window(question, default_last_n=10)
-            if _JOURNAL_OVERVIEW_RE.search(q):
-                return db.journal_overview(y0, y1)
+            # Do NOT fall back to journal-wide stats for a named-author miss —
+            # that invites the synthesizer to invent a fake personal profile.
             return {
-                "scope": "journal",
-                "start_year": y0,
-                "end_year": y1,
-                "yearly": db.yearly_counts(y0, y1),
-                "keywords": db.top_keywords(20, y0, y1),
-                "funds": db.top_funds(12),
-                "authors": db.top_authors(12, y0, y1),
-                "institutions": db.top_institutions(12, y0, y1),
-                "note": f"未识别到有效作者「{author}」，已改用全刊统计",
-                "source": "sqlite",
+                **profile,
+                "author_name": author,
+                "task": "author_profile",
+                "found": False,
+                "papers": [],
+                "total_papers": 0,
+                "note": f"本刊库中未找到作者「{author}」",
             }
         evidence: Dict[str, Any] = {
             **profile,
             "author_name": author,
             "start_year": profile.get("year_min"),
             "end_year": profile.get("year_max"),
+            "found": True,
         }
         if any(k in q for k in ("机构", "单位", "合作", "发文", "概况", "情况", "分布")):
             evidence["collaborator_institutions"] = db.collaborator_institutions(author)
@@ -668,6 +882,31 @@ def invoke(
                     )
                 },
             )
+
+        if operation == "keyword_growth":
+            return ok_result("sql", operation, db.keyword_growth(
+                params.get("limit", 20), params.get("year_start"), params.get("year_end")
+            ))
+
+        if operation == "topic_period_compare":
+            return ok_result("sql", operation, db.topic_period_compare(
+                params.get("keywords") or [], params.get("year_start"), params.get("year_end"), params.get("limit", 20)
+            ))
+
+        if operation == "author_direction_evolution":
+            return ok_result("sql", operation, db.author_direction_evolution(
+                params.get("author_name"), params.get("author_id"), params.get("year_start"), params.get("year_end")
+            ))
+
+        if operation == "author_direction_diversity":
+            return ok_result("sql", operation, db.author_direction_diversity(
+                params.get("limit", 10), params.get("year_start"), params.get("year_end")
+            ))
+
+        if operation == "institution_stability":
+            return ok_result("sql", operation, db.institution_stability(
+                params.get("limit", 10), params.get("year_start"), params.get("year_end")
+            ))
 
         if operation == "authors_by_keyword":
             return ok_result(

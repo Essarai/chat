@@ -22,10 +22,15 @@ def _asks_authors(question: str) -> bool:
 
 
 def _real_topics(topics: List[str]) -> List[str]:
+    meta = {
+        "热点", "研究热点", "主题", "研究主题", "领域", "研究领域",
+        "方向", "研究方向", "接受文章", "收录领域", "投稿领域",
+        "热门关键词", "热门词", "热词", "关键词",
+    }
     out: List[str] = []
     for t in topics or []:
         s = str(t).strip()
-        if s and s not in out:
+        if s and s not in meta and s not in out:
             out.append(s)
     return out
 
@@ -187,7 +192,7 @@ def plan_from_intent(intent: Dict[str, Any], question: str = "") -> Optional[Dic
         or (
             entity in {"author", "paper"}
             and op in {"search", "profile", "summarize"}
-            and re.search(r"发表|论文|发文|合作|轨迹|主题|伙伴|团队", q)
+            and re.search(r"发表|论文|发文|合作|轨迹|主题|伙伴|团队|有没有|是否有|在平台", q)
         )
     ):
         return {
@@ -331,6 +336,25 @@ def plan_from_intent(intent: Dict[str, Any], question: str = "") -> Optional[Dic
             "plan_source": "schema",
         }
 
+    # Hotspots are a ranked set of themes, not a literal topic named「热点」.
+    if (
+        entity in {"topic", "journal", "paper"}
+        and re.search(r"(?:有哪些|什么|主要|当前|近期|近年).{0,8}(?:热点|热门领域|热门方向)|(?:热点|热门领域|热门方向).{0,8}(?:有哪些|是什么)", q)
+        and not re.search(r"变化|演变|变迁|对比|前.*后", q)
+    ):
+        return {
+            "task": "top_directions_with_papers",
+            "sources": ["sql"],
+            "sql_ops": ["top_keywords", "papers_by_top_keywords"],
+            "year_start": y0,
+            "year_end": y1,
+            "top_n_directions": int(top_n or 10),
+            "keywords": [],
+            "focus": "按指定时间范围的关键词发文量列出研究热点，并给出代表论文。",
+            "complexity": "simple",
+            "plan_source": "schema",
+        }
+
     # Emerging / inventory directions
     if entity in {"topic", "journal"} and (
         goal == "inventory"
@@ -352,6 +376,26 @@ def plan_from_intent(intent: Dict[str, Any], question: str = "") -> Optional[Dic
             "top_n_directions": n,
             "keywords": [],
             "focus": "基于关键词发文量归纳主要/新兴研究方向并给代表论文。",
+            "complexity": "simple",
+            "plan_source": "schema",
+        }
+
+    # Journal-wide theme evolution means keyword/hotspot composition changes,
+    # never publication-volume growth. No named topic is required here.
+    if (
+        op == "trend"
+        and entity in {"journal", "topic", "paper"}
+        and re.search(r"(?:主题|研究方向|领域|收录方向|接受文章|热点).*(?:变化|演变|变迁|发展)|(?:变化|演变|变迁).*(?:主题|研究方向|领域|热点)", q)
+        and not re.search(r"每年发文|逐年发文|发文数量|发文趋势|增长最快|同比", q)
+    ):
+        return {
+            "task": "hotspot_compare",
+            "sources": ["sql"],
+            "sql_ops": ["hotspot_compare"],
+            "year_start": None,
+            "year_end": y1,
+            "keywords": [],
+            "focus": "对比前后时间窗的高频关键词，说明期刊研究主题的增强、新增、回落与淡出。",
             "complexity": "simple",
             "plan_source": "schema",
         }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import time
 from typing import Any, Dict, Iterator, List, Optional
 
 from app.agents.controller import prepare_journal_agent, run_journal_agent
@@ -21,6 +22,10 @@ class AskResult:
     route_reason: str = ""
     citations: List[Dict[str, Any]] = field(default_factory=list)
     evidence: Dict[str, Any] = field(default_factory=dict)
+    truncated: bool = False
+    shown_count: int = 0
+    total_count: int = 0
+    has_more: bool = False
 
 
 class ChatOrchestrator:
@@ -33,8 +38,6 @@ class ChatOrchestrator:
     ):
         self.settings = settings or get_settings()
         self.chat = chat or MiniMaxChat(self.settings)
-        self.history: List[Dict[str, str]] = []
-        self.last_dois: List[str] = []
         self._db: SQLiteRepo | None = None
         self._neo4j: Neo4jRepo | None = None
 
@@ -52,10 +55,6 @@ class ChatOrchestrator:
             self._neo4j = Neo4jRepo(self.settings)
         return self._neo4j
 
-    def reset(self) -> None:
-        self.history.clear()
-        self.last_dois.clear()
-
     def _bind(self) -> Settings:
         return bind_corpus(self.settings.journal_id)
 
@@ -69,7 +68,6 @@ class ChatOrchestrator:
         )
         data = result.get("data") or {}
         hits = data.get("hits") or []
-        self.last_dois = [h["doi"] for h in hits if h.get("doi")]
         return hits
 
     def trends(self, question: str = "") -> Dict[str, Any]:
@@ -91,13 +89,13 @@ class ChatOrchestrator:
 
     def graph_lookup(self, question: str) -> Dict[str, Any]:
         self._bind()
-        ents = regex_extract(question, self.last_dois)
+        ents = regex_extract(question, [])
         result = kg_capability.invoke(
             "execute_plan",
             question=question,
             entities=ents,
             plan={"kg_ops": ["author_ego"] if ents.get("author_name") else ["keyword_ego"]},
-            last_dois=self.last_dois,
+            last_dois=[],
             journal_id=self.settings.journal_id,
         )
         return result.get("data") or {}
@@ -110,16 +108,19 @@ class ChatOrchestrator:
         rag = final.get("rag_evidence") or {}
         if rag.get("citations") and not citations:
             citations = rag["citations"]
-        dois = (final.get("entities") or {}).get("dois") or [
-            c.get("doi") for c in citations if c.get("doi")
-        ]
-        self.last_dois = [d for d in dois if d]
-
-        self.history.append({"role": "user", "content": question})
-        self.history.append({"role": "assistant", "content": answer})
-        max_h = self.settings.chat_max_history
-        if len(self.history) > max_h * 2:
-            self.history = self.history[-max_h * 2 :]
+        sql = final.get("sql_evidence") or {}
+        result_set = final.get("result_set") or {}
+        shown_count = int(sql.get("shown_count") or 0)
+        if not shown_count:
+            shown_count = len(result_set.get("items") or [])
+        if not shown_count:
+            for key in ("authors", "institutions", "papers", "keywords", "yearly"):
+                if isinstance(sql.get(key), list):
+                    shown_count = len(sql[key])
+                    if shown_count:
+                        break
+        total_count = int(sql.get("total_count") or shown_count)
+        has_more = bool(sql.get("has_more"))
 
         return AskResult(
             answer=answer,
@@ -130,9 +131,16 @@ class ChatOrchestrator:
             evidence={
                 "intents": intents,
                 "route_reason": final.get("route_reason"),
+                "followup_intent": final.get("followup_intent"),
+                "turn_intent": final.get("turn_intent"),
+                "intent_schema": final.get("intent") or {},
                 "route": final.get("route"),
                 "query_plan": final.get("query_plan"),
                 "analysis_plan": final.get("analysis_plan"),
+                "operation_results": final.get("operation_results") or [],
+                "coverage_report": final.get("coverage_report") or {},
+                "result_set": result_set,
+                "answer_coverage": final.get("answer_coverage") or {},
                 "goal": final.get("goal"),
                 "stage": final.get("stage"),
                 "evidence_bundle": final.get("evidence_bundle"),
@@ -142,37 +150,73 @@ class ChatOrchestrator:
                 "rag": final.get("rag_evidence"),
                 "errors": final.get("errors") or [],
             },
+            truncated=has_more,
+            shown_count=shown_count,
+            total_count=total_count,
+            has_more=has_more,
         )
 
-    def ask(self, question: str, top_k: Optional[int] = None) -> AskResult:
+    def ask(
+        self,
+        question: str,
+        top_k: Optional[int] = None,
+        history: Optional[List[Dict[str, str]]] = None,
+        last_dois: Optional[List[str]] = None,
+        previous_turn: Optional[Dict[str, Any]] = None,
+    ) -> AskResult:
         self._bind()
-        final = run_journal_agent(
+        started = time.monotonic()
+        prepared = prepare_journal_agent(
             question,
-            history=self.history,
+            history=history or [],
             top_k=top_k,
-            last_dois=self.last_dois,
+            last_dois=last_dois or [],
             journal_id=self.settings.journal_id,
+            previous_turn=previous_turn,
         )
-        return self._pack_result(question, final, final.get("answer") or "")
+        prepared_ms = int((time.monotonic() - started) * 1000)
+        generation_started = time.monotonic()
+        answer = finalize_answer("".join(stream_generate(prepared)), prepared.get("intents") or [], prepared)
+        from app.agents.coverage import assess_answer_coverage
+        prepared["answer_coverage"] = assess_answer_coverage(answer, prepared.get("operation_results") or [])
+        prepared["stage_timings_ms"] = {
+            "understand_query_retrieve": prepared_ms,
+            "generate": int((time.monotonic() - generation_started) * 1000),
+            "total": int((time.monotonic() - started) * 1000),
+        }
+        result = self._pack_result(question, prepared, answer)
+        result.evidence["stage_timings_ms"] = prepared["stage_timings_ms"]
+        return result
 
-    def ask_stream(self, question: str, top_k: Optional[int] = None) -> Iterator[Dict[str, Any]]:
+    def ask_stream(
+        self,
+        question: str,
+        top_k: Optional[int] = None,
+        history: Optional[List[Dict[str, str]]] = None,
+        last_dois: Optional[List[str]] = None,
+        previous_turn: Optional[Dict[str, Any]] = None,
+    ) -> Iterator[Dict[str, Any]]:
         """Yield SSE-friendly events: status → delta* → done | error."""
         self._bind()
-        yield {"type": "status", "message": "检索与分析中…"}
+        started = time.monotonic()
+        yield {"type": "status", "stage": "understand", "message": "理解问题中…"}
+        yield {"type": "status", "stage": "retrieve", "message": "查询数据中…"}
         try:
             prepared = prepare_journal_agent(
                 question,
-                history=self.history,
+                history=history or [],
                 top_k=top_k,
-                last_dois=self.last_dois,
+                last_dois=last_dois or [],
                 journal_id=self.settings.journal_id,
+                previous_turn=previous_turn,
             )
         except Exception as e:
             yield {"type": "error", "message": str(e)}
             return
 
         intents = prepared.get("intents") or ["rag"]
-        yield {"type": "status", "message": "生成回答中…"}
+        prepared_ms = int((time.monotonic() - started) * 1000)
+        yield {"type": "status", "stage": "answer", "message": "组织答案中…"}
 
         chunks: List[str] = []
         try:
@@ -182,6 +226,8 @@ class ChatOrchestrator:
         except Exception as e:
             if chunks:
                 answer = finalize_answer("".join(chunks), intents, prepared)
+                from app.agents.coverage import assess_answer_coverage
+                prepared["answer_coverage"] = assess_answer_coverage(answer, prepared.get("operation_results") or [])
                 result = self._pack_result(question, prepared, answer)
                 yield {
                     "type": "done",
@@ -189,17 +235,35 @@ class ChatOrchestrator:
                     "citations": result.citations,
                     "partial": True,
                     "error": str(e),
+                    "truncated": result.truncated,
+                    "shown_count": result.shown_count,
+                    "total_count": result.total_count,
+                    "has_more": result.has_more,
+                    "evidence": result.evidence,
                 }
             else:
                 yield {"type": "error", "message": str(e)}
             return
 
         answer = finalize_answer("".join(chunks), intents, prepared)
+        from app.agents.coverage import assess_answer_coverage
+        prepared["answer_coverage"] = assess_answer_coverage(answer, prepared.get("operation_results") or [])
+        prepared["stage_timings_ms"] = {
+            "understand_query_retrieve": prepared_ms,
+            "generate": int((time.monotonic() - started) * 1000) - prepared_ms,
+            "total": int((time.monotonic() - started) * 1000),
+        }
         result = self._pack_result(question, prepared, answer)
+        result.evidence["stage_timings_ms"] = prepared["stage_timings_ms"]
         yield {
             "type": "done",
             "answer": result.answer,
             "citations": result.citations,
             "intent": result.intent,
             "intents": result.intents,
+            "truncated": result.truncated,
+            "shown_count": result.shown_count,
+            "total_count": result.total_count,
+            "has_more": result.has_more,
+            "evidence": result.evidence,
         }

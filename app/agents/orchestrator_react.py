@@ -36,6 +36,11 @@ SQL_OPS = {
     "hotspot_compare",
     "topic_coverage",
     "submission_fit",
+    "keyword_growth",
+    "topic_period_compare",
+    "author_direction_evolution",
+    "author_direction_diversity",
+    "institution_stability",
     "execute_plan",
     "legacy",
 }
@@ -278,7 +283,8 @@ def _run_tool(
         return (
             {
                 "sql_evidence": merged,
-                "query_plan": {**(state.get("query_plan") or {}), **plan, "sources": list(set((state.get("intents") or []) + ["sql"]))},
+                # The canonical QueryPlan is immutable during execution.
+                "query_plan": dict(state.get("query_plan") or {}),
                 "intents": list(dict.fromkeys((state.get("intents") or []) + ["sql"])),
             },
             summary,
@@ -744,6 +750,55 @@ def react_controller_node(state: JournalState) -> Dict[str, Any]:
     if y1 is not None:
         entities["year_end"] = y1
     working["entities"] = entities
+
+    # Canonical plans are executed as a locked operation list.  ReAct remains
+    # only as a legacy fallback for plans that have not crossed the new
+    # compatibility boundary.
+    specs = [op for op in (state.get("query_plan") or {}).get("operations") or [] if isinstance(op, dict)]
+    if specs:
+        plan = dict(state.get("query_plan") or {})
+        updates: Dict[str, Any] = {"query_plan": plan, "intents": list(plan.get("sources") or [])}
+        for source in ("sql", "kg", "rag"):
+            source_specs = [op for op in specs if op.get("source") == source]
+            if not source_specs:
+                continue
+            try:
+                if source == "sql":
+                    data = run_sql_agent(question, entities, plan, journal_id=state.get("journal_id"))
+                    updates["sql_evidence"] = data
+                elif source == "kg":
+                    source_plan = {**plan, "kg_ops": [op.get("type") for op in source_specs]}
+                    data = run_kg_agent(
+                        question, entities, entities.get("dois") or [], source_plan,
+                        journal_id=state.get("journal_id"),
+                    )
+                    updates["kg_evidence"] = data
+                else:
+                    queries = plan.get("rag_queries") or [question]
+                    data = run_rag_agent(
+                        question, top_k=state.get("top_k"), queries=queries,
+                        year_start=plan.get("year_start"), year_end=plan.get("year_end"),
+                        journal_id=state.get("journal_id"),
+                    )
+                    updates["rag_evidence"] = data
+                summary = _summarize(source, data)
+                bundle.append({
+                    "step": len(bundle) + 1, "source": source,
+                    "operation": ",".join(str(op.get("type")) for op in source_specs),
+                    "summary": summary,
+                })
+                trace.append({
+                    "step": len(trace) + 1, "thought": "按锁定 QueryPlan 执行",
+                    "action": f"{source}_agent", "args": {"operation_ids": [op.get("id") for op in source_specs]},
+                    "observation": summary[:500],
+                })
+            except Exception as exc:
+                errors.append(f"operation_exec:{source}: {exc}")
+                updates[f"{source}_evidence"] = {"error": str(exc)}
+        updates["evidence_bundle"] = bundle
+        updates["react_trace"] = trace
+        updates["errors"] = errors
+        return updates
 
     for step in range(1, MAX_STEPS + 1):
         decision: Dict[str, Any] = {}

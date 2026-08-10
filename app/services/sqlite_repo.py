@@ -3,7 +3,9 @@ from __future__ import annotations
 import re
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
+from statistics import median
 from typing import Any, Dict, Iterator, List, Optional
 
 from app.config import Settings, get_settings
@@ -106,6 +108,96 @@ class SQLiteRepo:
         with self._conn() as conn:
             return self._rows(conn.execute(sql, params))
 
+    def keyword_growth(
+        self,
+        limit: int = 20,
+        start_year: Optional[int] = None,
+        end_year: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Keyword share growth over two complete-year windows."""
+        current_year = datetime.now().year
+        with self._conn() as conn:
+            bounds = conn.execute(
+                "SELECT MIN(year), MAX(year) FROM papers WHERE year IS NOT NULL"
+            ).fetchone()
+        db_min = int(bounds[0]) if bounds and bounds[0] else current_year - 10
+        db_max = int(bounds[1]) if bounds and bounds[1] else current_year
+        raw_end = min(int(end_year or db_max), db_max)
+        score_end = min(raw_end, current_year - 1)
+        y0 = max(db_min, int(start_year)) if start_year is not None else max(db_min, score_end - 9)
+        score_years = list(range(y0, score_end + 1))
+        split = len(score_years) // 2
+        early_years = score_years[:split]
+        late_years = score_years[split:]
+        if not early_years or not late_years:
+            return {
+                "scope": "keyword_growth", "start_year": y0, "end_year": raw_end,
+                "score_end_year": score_end, "periods": [], "keyword_growth": [],
+                "partial_year": raw_end if raw_end == current_year else None,
+                "source": "sqlite",
+            }
+        with self._conn() as conn:
+            totals = self._rows(conn.execute(
+                """
+                SELECT year, COUNT(DISTINCT doi) AS paper_count
+                FROM papers WHERE year BETWEEN ? AND ? GROUP BY year
+                """,
+                (y0, raw_end),
+            ))
+            rows = self._rows(conn.execute(
+                """
+                SELECT pk.label_zh AS keyword, p.year AS year,
+                       COUNT(DISTINCT p.doi) AS paper_count
+                FROM paper_keywords pk JOIN papers p ON p.doi=pk.doi
+                WHERE p.year BETWEEN ? AND ?
+                  AND pk.label_zh IS NOT NULL AND pk.label_zh<>''
+                GROUP BY pk.label_zh, p.year
+                """,
+                (y0, raw_end),
+            ))
+        totals_by_year = {int(r["year"]): int(r["paper_count"] or 0) for r in totals}
+        by_kw: Dict[str, Dict[int, int]] = {}
+        for row in rows:
+            by_kw.setdefault(str(row["keyword"]), {})[int(row["year"])] = int(row["paper_count"] or 0)
+        early_total = sum(totals_by_year.get(y, 0) for y in early_years)
+        late_total = sum(totals_by_year.get(y, 0) for y in late_years)
+        growth: List[Dict[str, Any]] = []
+        for keyword, series in by_kw.items():
+            early = sum(series.get(y, 0) for y in early_years)
+            late = sum(series.get(y, 0) for y in late_years)
+            if late < 2 and early < 2:
+                continue
+            early_share = early / early_total if early_total else 0.0
+            late_share = late / late_total if late_total else 0.0
+            late_active = sum(1 for y in late_years if series.get(y, 0) > 0)
+            growth.append({
+                "keyword": keyword,
+                "first_seen_year": min(series) if series else None,
+                "early_count": early,
+                "late_count": late,
+                "early_share_pct": round(early_share * 100, 3),
+                "late_share_pct": round(late_share * 100, 3),
+                "share_delta_pp": round((late_share - early_share) * 100, 3),
+                "relative_growth_pct": round((late - early) / early * 100, 1) if early else None,
+                "late_active_years": late_active,
+                "emerging": early <= 1 and late >= 3 and late_active >= 2,
+                "yearly": [{"year": y, "paper_count": series.get(y, 0)} for y in range(y0, raw_end + 1)],
+            })
+        growth.sort(key=lambda r: (-float(r["share_delta_pp"]), -int(r["late_count"]), r["keyword"]))
+        return {
+            "scope": "keyword_growth",
+            "start_year": y0,
+            "end_year": raw_end,
+            "score_end_year": score_end,
+            "partial_year": raw_end if raw_end == current_year else None,
+            "periods": [
+                {"label": "前期", "start_year": early_years[0], "end_year": early_years[-1], "paper_count": early_total},
+                {"label": "近期", "start_year": late_years[0], "end_year": late_years[-1], "paper_count": late_total},
+            ],
+            "keyword_growth": growth[:limit],
+            "source": "sqlite",
+        }
+
     def top_funds(self, limit: int = 15) -> List[Dict[str, Any]]:
         with self._conn() as conn:
             return self._rows(
@@ -150,6 +242,67 @@ class SQLiteRepo:
         """
         with self._conn() as conn:
             return self._rows(conn.execute(sql, params))
+
+    def papers_for_authors(
+        self,
+        author_ids: List[str],
+        start_year: Optional[int] = None,
+        end_year: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return papers grouped by stable author ids, preserving input order."""
+        ids = [str(v).strip() for v in author_ids or [] if str(v).strip()]
+        if not ids:
+            return []
+        placeholders = ",".join("?" for _ in ids)
+        clauses = [f"pa.author_id IN ({placeholders})"]
+        params: List[Any] = list(ids)
+        if start_year is not None:
+            clauses.append("p.year >= ?")
+            params.append(start_year)
+        if end_year is not None:
+            clauses.append("p.year <= ?")
+            params.append(end_year)
+        with self._conn() as conn:
+            rows = self._rows(
+                conn.execute(
+                    f"""
+                    SELECT DISTINCT pa.author_id AS author_id,
+                           a.name_zh AS name_zh,
+                           a.name_en AS name_en,
+                           p.doi AS doi,
+                           p.title_zh AS title_zh,
+                           p.title_en AS title_en,
+                           p.year AS year
+                    FROM paper_authors pa
+                    JOIN authors a ON a.author_id = pa.author_id
+                    JOIN papers p ON p.doi = pa.doi
+                    WHERE {' AND '.join(clauses)}
+                    ORDER BY p.year DESC, p.doi
+                    """,
+                    params,
+                )
+            )
+        by_id: Dict[str, Dict[str, Any]] = {
+            aid: {"author_id": aid, "name_zh": None, "name_en": None, "papers": []}
+            for aid in ids
+        }
+        seen: Dict[str, set] = {aid: set() for aid in ids}
+        for row in rows:
+            aid = row.get("author_id")
+            if aid not in by_id or row.get("doi") in seen[aid]:
+                continue
+            seen[aid].add(row.get("doi"))
+            by_id[aid]["name_zh"] = row.get("name_zh")
+            by_id[aid]["name_en"] = row.get("name_en")
+            by_id[aid]["papers"].append(
+                {
+                    "doi": row.get("doi"),
+                    "title_zh": row.get("title_zh"),
+                    "title_en": row.get("title_en"),
+                    "year": row.get("year"),
+                }
+            )
+        return [by_id[aid] for aid in ids]
 
     def top_institutions(
         self,
@@ -774,6 +927,212 @@ class SQLiteRepo:
             "yearly_by_keyword": yearly_by_term,
             "source": "sqlite",
         }
+
+    def topic_period_compare(
+        self,
+        topics: List[str],
+        start_year: Optional[int] = None,
+        end_year: Optional[int] = None,
+        limit: int = 20,
+    ) -> Dict[str, Any]:
+        """Compare normalized topic/keyword shares between two periods."""
+        growth = self.keyword_growth(max(limit * 3, 40), start_year, end_year)
+        periods = growth.get("periods") or []
+        requested = [str(t).strip() for t in topics or [] if str(t).strip()]
+        rows = list(growth.get("keyword_growth") or [])
+        if requested:
+            selected: List[Dict[str, Any]] = []
+            for topic in requested:
+                stats = self.topic_keyword_stats(
+                    [topic],
+                    periods[0]["start_year"] if periods else start_year,
+                    periods[-1]["end_year"] if periods else end_year,
+                )
+                series = (stats.get("yearly_by_keyword") or {}).get(topic) or []
+                counts = {int(r["year"]): int(r.get("paper_count") or 0) for r in series}
+                if len(periods) >= 2:
+                    early_years = range(periods[0]["start_year"], periods[0]["end_year"] + 1)
+                    late_years = range(periods[1]["start_year"], periods[1]["end_year"] + 1)
+                    early = sum(counts.get(y, 0) for y in early_years)
+                    late = sum(counts.get(y, 0) for y in late_years)
+                    early_total = int(periods[0].get("paper_count") or 0)
+                    late_total = int(periods[1].get("paper_count") or 0)
+                    es = early / early_total if early_total else 0
+                    ls = late / late_total if late_total else 0
+                    selected.append({
+                        "keyword": topic, "early_count": early, "late_count": late,
+                        "early_share_pct": round(es * 100, 3),
+                        "late_share_pct": round(ls * 100, 3),
+                        "share_delta_pp": round((ls - es) * 100, 3),
+                    })
+            rows = selected
+        enhanced = [r for r in rows if float(r.get("share_delta_pp") or 0) > 0]
+        weakened = [r for r in rows if float(r.get("share_delta_pp") or 0) < 0]
+        return {
+            "scope": "topic_period_compare",
+            "start_year": growth.get("start_year"),
+            "end_year": growth.get("end_year"),
+            "partial_year": growth.get("partial_year"),
+            "periods": periods,
+            "topics": rows[:limit],
+            "enhanced": sorted(enhanced, key=lambda r: -float(r.get("share_delta_pp") or 0))[:limit],
+            "weakened": sorted(weakened, key=lambda r: float(r.get("share_delta_pp") or 0))[:limit],
+            "new": [r for r in rows if int(r.get("early_count") or 0) == 0 and int(r.get("late_count") or 0) > 0][:limit],
+            "disappeared": [r for r in rows if int(r.get("early_count") or 0) > 0 and int(r.get("late_count") or 0) == 0][:limit],
+            "source": "sqlite",
+        }
+
+    @staticmethod
+    def _three_periods(start_year: int, end_year: int) -> List[tuple]:
+        years = list(range(start_year, end_year + 1))
+        if not years:
+            return []
+        size = max(1, len(years) // 3)
+        chunks = [years[:size], years[size: size * 2], years[size * 2:]]
+        labels = ["早期", "中期", "近期"]
+        return [(labels[i], chunk[0], chunk[-1]) for i, chunk in enumerate(chunks) if chunk]
+
+    def author_direction_evolution(
+        self,
+        name: Optional[str] = None,
+        author_id: Optional[str] = None,
+        start_year: Optional[int] = None,
+        end_year: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        author = None
+        if author_id:
+            with self._conn() as conn:
+                row = conn.execute(
+                    "SELECT author_id,name_zh,name_en FROM authors WHERE author_id=?", (author_id,)
+                ).fetchone()
+                author = dict(row) if row else None
+        if not author and name:
+            author = self.resolve_author(name)
+        if not author:
+            return {"scope": "author_direction_evolution", "author": None, "periods": [], "total_papers": 0, "source": "sqlite"}
+        aid = author["author_id"]
+        with self._conn() as conn:
+            bounds = conn.execute(
+                """SELECT MIN(p.year),MAX(p.year),COUNT(DISTINCT p.doi)
+                   FROM paper_authors pa JOIN papers p ON p.doi=pa.doi
+                   WHERE pa.author_id=? AND p.year IS NOT NULL""", (aid,)
+            ).fetchone()
+        if not bounds or bounds[0] is None:
+            return {"scope": "author_direction_evolution", "author": author, "periods": [], "total_papers": 0, "source": "sqlite"}
+        y0 = max(int(bounds[0]), int(start_year)) if start_year is not None else int(bounds[0])
+        y1 = min(int(bounds[1]), int(end_year)) if end_year is not None else int(bounds[1])
+        periods: List[Dict[str, Any]] = []
+        for label, a, b in self._three_periods(y0, y1):
+            with self._conn() as conn:
+                papers = self._rows(conn.execute(
+                    """SELECT DISTINCT p.doi,p.title_zh,p.year
+                       FROM paper_authors pa JOIN papers p ON p.doi=pa.doi
+                       WHERE pa.author_id=? AND p.year BETWEEN ? AND ?
+                       ORDER BY p.year DESC,p.doi""", (aid, a, b)
+                ))
+                keywords = self._rows(conn.execute(
+                    """SELECT pk.label_zh AS keyword,COUNT(DISTINCT p.doi) AS paper_count
+                       FROM paper_authors pa JOIN papers p ON p.doi=pa.doi
+                       JOIN paper_keywords pk ON pk.doi=p.doi
+                       WHERE pa.author_id=? AND p.year BETWEEN ? AND ?
+                         AND pk.label_zh IS NOT NULL AND pk.label_zh<>''
+                       GROUP BY pk.label_zh ORDER BY paper_count DESC,keyword LIMIT 10""",
+                    (aid, a, b),
+                ))
+            total = len(papers)
+            for kw in keywords:
+                kw["share_pct"] = round(int(kw.get("paper_count") or 0) / total * 100, 1) if total else 0
+            periods.append({"label": label, "start_year": a, "end_year": b, "paper_count": total, "keywords": keywords, "papers": papers[:5]})
+        nonempty = [p for p in periods if p["paper_count"]]
+        early_map = {r["keyword"]: float(r.get("share_pct") or 0) for r in (nonempty[0]["keywords"] if nonempty else [])}
+        late_map = {r["keyword"]: float(r.get("share_pct") or 0) for r in (nonempty[-1]["keywords"] if nonempty else [])}
+        changes = []
+        for kw in sorted(set(early_map) | set(late_map)):
+            delta = round(late_map.get(kw, 0) - early_map.get(kw, 0), 1)
+            changes.append({"keyword": kw, "early_share_pct": early_map.get(kw, 0), "late_share_pct": late_map.get(kw, 0), "share_delta_pp": delta, "change": "新增" if kw not in early_map else ("减弱" if kw not in late_map or delta < 0 else "增强")})
+        changes.sort(key=lambda r: -abs(float(r["share_delta_pp"])))
+        return {
+            "scope": "author_direction_evolution", "author": author,
+            "start_year": y0, "end_year": y1, "total_papers": sum(p["paper_count"] for p in periods),
+            "periods": periods, "changes": changes[:15], "source": "sqlite",
+        }
+
+    def author_direction_diversity(
+        self,
+        limit: int = 10,
+        start_year: Optional[int] = None,
+        end_year: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        authors = self.author_keywords_sample(max(limit * 3, 20), 20, start_year, end_year)
+        rows = []
+        for author in authors:
+            kws = [r for r in author.get("keywords") or [] if int(r.get("paper_count") or 0) >= 2]
+            total_mentions = sum(int(r.get("paper_count") or 0) for r in kws)
+            max_mentions = max([int(r.get("paper_count") or 0) for r in kws] or [0])
+            rows.append({
+                **author,
+                "direction_count": len(kws),
+                "topic_concentration": round(max_mentions / total_mentions, 3) if total_mentions else 1.0,
+                "keywords": kws[:8],
+            })
+        rows.sort(key=lambda r: (-int(r["direction_count"]), float(r["topic_concentration"]), -int(r.get("paper_count") or 0)))
+        return {"scope": "author_direction_diversity", "authors": rows[:limit], "start_year": start_year, "end_year": end_year, "source": "sqlite"}
+
+    def institution_stability(
+        self,
+        limit: int = 10,
+        start_year: Optional[int] = None,
+        end_year: Optional[int] = None,
+        annual_top_n: int = 10,
+    ) -> Dict[str, Any]:
+        current_year = datetime.now().year
+        with self._conn() as conn:
+            bounds = conn.execute("SELECT MIN(year),MAX(year) FROM papers WHERE year IS NOT NULL").fetchone()
+        db_min = int(bounds[0]) if bounds and bounds[0] else current_year - 10
+        db_max = int(bounds[1]) if bounds and bounds[1] else current_year
+        y1 = min(int(end_year or db_max), current_year - 1, db_max)
+        y0 = max(db_min, int(start_year)) if start_year is not None else max(db_min, y1 - 9)
+        years = list(range(y0, y1 + 1))
+        by_inst: Dict[str, Dict[int, set]] = {}
+        for year in years:
+            with self._conn() as conn:
+                rows = self._rows(conn.execute(
+                    """SELECT i.name_norm AS institution,ai.doi
+                       FROM author_institutions ai JOIN institutions i ON i.institution_id=ai.institution_id
+                       JOIN papers p ON p.doi=ai.doi
+                       WHERE p.year=? AND i.name_norm IS NOT NULL AND i.name_norm<>''""", (year,)
+                ))
+            for row in rows:
+                key = _normalize_institution_name(str(row.get("institution") or ""))
+                if key and row.get("doi"):
+                    by_inst.setdefault(key, {}).setdefault(year, set()).add(row["doi"])
+        top_by_year: Dict[int, set] = {}
+        for year in years:
+            ranked = sorted(((inst, len(data.get(year, set()))) for inst, data in by_inst.items()), key=lambda x: (-x[1], x[0]))
+            top_by_year[year] = {inst for inst, count in ranked[:annual_top_n] if count > 0}
+        out = []
+        for inst, data in by_inst.items():
+            counts = [len(data.get(y, set())) for y in years]
+            active = [y for y, count in zip(years, counts) if count > 0]
+            longest = run = 0
+            for count in counts:
+                run = run + 1 if count > 0 else 0
+                longest = max(longest, run)
+            top_years = sum(1 for y in years if inst in top_by_year[y])
+            active_rate = len(active) / len(years) if years else 0
+            top_rate = top_years / len(years) if years else 0
+            out.append({
+                "institution": inst, "institution_id": f"normalized:{inst}",
+                "total_papers": sum(counts), "active_years": len(active),
+                "active_year_rate": round(active_rate, 3), "top10_years": top_years,
+                "top10_year_rate": round(top_rate, 3),
+                "median_annual_papers": float(median(counts)) if counts else 0,
+                "max_consecutive_active_years": longest,
+                "stable_high_output": active_rate >= 0.8 and top_rate >= 0.5,
+                "yearly": [{"year": y, "paper_count": count} for y, count in zip(years, counts)],
+            })
+        out.sort(key=lambda r: (-int(r["top10_years"]), -int(r["active_years"]), -int(r["total_papers"]), r["institution"]))
+        return {"scope": "institution_stability", "start_year": y0, "end_year": y1, "years": years, "institutions": out[:limit], "source": "sqlite"}
 
     def author_keywords_sample(
         self,

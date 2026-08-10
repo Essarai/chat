@@ -44,6 +44,9 @@ python3 -m uvicorn app.api.main:app --host 0.0.0.0 --port 8080
 | `CHROMA_HOST` / `CHROMA_PORT` / `CHROMA_TOKEN` | 仅 `CHROMA_TARGET=http` 时需要 |
 | `NEO4J_URI` / `NEO4J_USER` / `NEO4J_PASSWORD` | 远程 Neo4j |
 | `SQLITE_PATH` | 默认 `./data/journal.db`（镜像已含库） |
+| `ALLOWED_ORIGINS` | 公网部署时配置允许的前端来源，多个来源用逗号分隔 |
+| `API_ACCESS_TOKEN` | 可选；设置后除首页、静态资源和 `/health` 外均需 Bearer Token |
+| `REQUESTS_PER_MINUTE` | 可选；按客户端 IP 的每分钟请求上限，`0` 表示关闭 |
 
 ### 注意
 

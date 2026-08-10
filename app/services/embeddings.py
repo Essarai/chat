@@ -17,7 +17,7 @@ class MiniMaxEmbeddings:
         self,
         texts: List[str],
         embed_type: Literal["db", "query"] = "query",
-        retries: int = 5,
+        retries: int = 2,
     ) -> List[List[float]]:
         if not texts:
             return []
@@ -43,7 +43,7 @@ class MiniMaxEmbeddings:
                     headers=headers,
                     method="POST",
                 )
-                with urllib.request.urlopen(req, timeout=120) as resp:
+                with urllib.request.urlopen(req, timeout=30) as resp:
                     data = json.loads(resp.read().decode("utf-8"))
                 status = (data.get("base_resp") or {}).get("status_code", 0)
                 if status != 0:
@@ -54,7 +54,12 @@ class MiniMaxEmbeddings:
                 return vectors
             except Exception as e:
                 last_err = e
-                time.sleep(min(2**attempt, 20))
+                retryable = isinstance(e, (TimeoutError, urllib.error.URLError))
+                if isinstance(e, urllib.error.HTTPError):
+                    retryable = e.code == 429 or e.code >= 500
+                if not retryable or attempt + 1 >= retries:
+                    break
+                time.sleep(1)
         raise RuntimeError(f"embedding failed: {last_err}")
 
     def embed_query(self, text: str) -> List[float]:

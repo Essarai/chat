@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from typing import Any, Dict, Iterator, List, Optional
 
@@ -538,7 +539,9 @@ def try_keyword_authors_template_answer(state: JournalState) -> Optional[str]:
     if not authors:
         lines.append("未找到匹配作者。")
         return "\n".join(lines)
-    show_papers = len(authors) <= 12
+    # 主题作者榜的问题同时需要可核验的论文明细。此前作者数超过 12
+    # 时会隐藏 papers，导致“作者统计”与“相关论文”之间无法对应。
+    show_papers = True
     for i, a in enumerate(authors, 1):
         name = (a.get("name_zh") or a.get("name_en") or a.get("author_id") or "").strip()
         lines.append(f"{i}. **{name}**（{a.get('paper_count')}篇）")
@@ -631,6 +634,42 @@ def try_hotspot_compare_template(state: JournalState) -> Optional[str]:
     return _ensure_ordered_list_markdown("\n".join(lines))
 
 
+def try_hot_topics_template(state: JournalState) -> Optional[str]:
+    sql = state.get("sql_evidence") or {}
+    if sql.get("scope") != "top_directions":
+        return None
+    directions = sql.get("directions") or []
+    if not directions:
+        return None
+    lines = [
+        "## 期刊研究热点",
+        "",
+        f"统计区间：{sql.get('start_year') or '不限'}–{sql.get('end_year') or '不限'}",
+        "",
+    ]
+    for index, direction in enumerate(directions, 1):
+        lines.extend(
+            [
+                f"### {index}. {direction.get('keyword')}（{direction.get('paper_count')}篇）",
+                "",
+            ]
+        )
+        for paper_index, paper in enumerate((direction.get("papers") or [])[:3], 1):
+            title = paper.get("title_zh") or paper.get("title") or "（无题名）"
+            year = paper.get("year")
+            doi = (paper.get("doi") or "").strip()
+            url = doi_url(doi) or ""
+            bits = [f"{paper_index}. **{title}**" + (f"（{year}）" if year else "")]
+            if doi:
+                bits.append(f"DOI: {doi}")
+            if url:
+                bits.append(f"[查看全文]({url})")
+            lines.append(" ".join(bits))
+        lines.append("")
+    lines.append("> 热点按结构化关键词关联论文数排序；“热点”本身未作为检索关键词。")
+    return _ensure_ordered_list_markdown("\n".join(lines))
+
+
 def try_top_institutions_template(state: JournalState) -> Optional[str]:
     sql = state.get("sql_evidence") or {}
     if sql.get("scope") != "top_institutions" and sql.get("task") != "top_institutions":
@@ -679,6 +718,55 @@ def try_top_authors_template(state: JournalState) -> Optional[str]:
     lines.append("")
     lines.append("> 以上来自本刊结构化发文统计。")
     return _ensure_ordered_list_markdown("\n".join(lines))
+
+
+def try_authors_papers_template(state: JournalState) -> Optional[str]:
+    sql = state.get("sql_evidence") or {}
+    if sql.get("scope") != "authors_papers":
+        return None
+    authors = sql.get("authors") or []
+    y0, y1 = sql.get("start_year"), sql.get("end_year")
+    offset = int(sql.get("offset") or 0)
+    shown = int(sql.get("shown_count") or 0)
+    total = int(sql.get("total_count") or 0)
+    lines = [
+        "## 作者具体论文",
+        "",
+        f"统计区间：{y0 or '不限'}–{y1 or '不限'}；"
+        f"本次展示第 {offset + 1 if shown else 0}–{offset + shown} 条，共 {total} 条作者–论文记录。",
+        "",
+    ]
+    if not authors:
+        lines.append("在该范围内未找到相关论文。")
+        return "\n".join(lines)
+    for author in authors:
+        name = (author.get("name_zh") or author.get("name_en") or author.get("author_id") or "（未知作者）").strip()
+        papers = author.get("papers") or []
+        lines.extend([f"### {name}（本次 {len(papers)} 篇）", ""])
+        for index, paper in enumerate(papers, 1):
+            title = (paper.get("title_zh") or paper.get("title_en") or "（无题名）").strip()
+            year = paper.get("year")
+            doi = (paper.get("doi") or "").strip()
+            url = doi_url(doi) or ""
+            bits = [f"{index}. **{title}**" + (f"（{year}）" if year else "")]
+            if doi:
+                bits.append(f"DOI: {doi}")
+            if url:
+                bits.append(f"[查看全文]({url})")
+            lines.append(" ".join(bits))
+        lines.append("")
+    if sql.get("has_more"):
+        lines.append(
+            f"> 内容较长，已展示 {offset + shown}/{total} 条。输入“继续”可列出剩余论文。"
+        )
+    return _ensure_ordered_list_markdown("\n".join(lines).strip())
+
+
+def try_clarification_template(state: JournalState) -> Optional[str]:
+    sql = state.get("sql_evidence") or {}
+    if sql.get("scope") != "clarification":
+        return None
+    return str(sql.get("message") or "请补充需要查询的对象。").strip()
 
 
 def try_institution_authors_template(state: JournalState) -> Optional[str]:
@@ -1062,11 +1150,42 @@ def try_yearly_growth_template(state: JournalState) -> Optional[str]:
     return "\n".join(lines).strip()
 
 
+def try_author_not_found_template(state: JournalState) -> Optional[str]:
+    """Hard refuse when a named author is absent from this journal corpus."""
+    sql = state.get("sql_evidence") or {}
+    plan = state.get("query_plan") or {}
+    entities = state.get("entities") or {}
+    is_author_task = (
+        sql.get("scope") == "author"
+        or plan.get("task") == "author_profile"
+        or sql.get("task") == "author_profile"
+    )
+    if not is_author_task:
+        return None
+    if sql.get("author"):
+        return None
+    name = (
+        sql.get("author_name")
+        or plan.get("author_name")
+        or entities.get("author_name")
+        or "该作者"
+    )
+    name = str(name).strip() or "该作者"
+    return (
+        f"## 未找到作者「{name}」\n\n"
+        f"在本刊知识库中**没有**名为「{name}」的作者记录，"
+        "因此**不能确认其在本刊有发文**，也无法列出论文、合作者或研究主题。\n\n"
+        "请核对姓名是否有误（含异体字/曾用名），或改问本刊其他已知作者。"
+    )
+
+
 def try_author_trajectory_template(state: JournalState) -> Optional[str]:
     sql = state.get("sql_evidence") or {}
     q = state.get("question") or ""
     if sql.get("scope") != "author":
         return None
+    if not sql.get("author"):
+        return try_author_not_found_template(state)
     if not re.search(r"轨迹|首次发表|主题变化|合作作者变化|合作者变化", q):
         return None
     author = sql.get("author") or {}
@@ -1150,16 +1269,25 @@ def try_coauthored_papers_template_answer(state: JournalState) -> Optional[str]:
 
 
 def try_author_template_answer(state: JournalState) -> Optional[str]:
-    """
-    Format structured answers directly from SQL evidence when possible.
-    Avoids LLM truncation and broken ** markers on long lists.
-    """
+    """Format structured SQL answers without a second interpretation pass."""
+    clarification = try_clarification_template(state)
+    if clarification:
+        return clarification
+    expanded = try_authors_papers_template(state)
+    if expanded:
+        return expanded
     refuse = try_unsupported_citations_template(state)
     if refuse:
         return refuse
+    missing = try_author_not_found_template(state)
+    if missing:
+        return missing
     hotspot = try_hotspot_compare_template(state)
     if hotspot:
         return hotspot
+    hot_topics = try_hot_topics_template(state)
+    if hot_topics:
+        return hot_topics
     inst = try_top_institutions_template(state)
     if inst:
         return inst
@@ -1266,6 +1394,166 @@ def try_author_template_answer(state: JournalState) -> Optional[str]:
     return text or None
 
 
+def _render_new_operation(op_type: str, data: Dict[str, Any]) -> Optional[str]:
+    if op_type == "top_keywords":
+        rows = data.get("keywords") or []
+        if not rows:
+            return None
+        lines = ["## 热门关键词", ""]
+        lines += [f"{i}. **{r.get('keyword')}**（{r.get('paper_count')}篇）" for i, r in enumerate(rows, 1)]
+        return "\n".join(lines)
+    if op_type == "institutions_by_keyword":
+        rows = data.get("institutions") or []
+        if not rows:
+            return None
+        lines = [f"## 主题「{data.get('keyword') or ''}」相关机构", ""]
+        lines += [f"{i}. **{r.get('institution')}**（{r.get('paper_count')}篇）" for i, r in enumerate(rows, 1)]
+        return "\n".join(lines)
+    if op_type == "author_keywords_sample":
+        rows = data.get("author_keywords") or []
+        if not rows:
+            return None
+        lines = ["## 核心作者及研究方向", ""]
+        for i, row in enumerate(rows, 1):
+            kws = "、".join(str(k.get("keyword")) for k in (row.get("keywords") or [])[:6])
+            lines.append(f"{i}. **{row.get('name_zh')}**（{row.get('paper_count')}篇）：{kws}")
+        return "\n".join(lines)
+    if op_type == "keyword_growth":
+        rows = data.get("keyword_growth") or []
+        periods = data.get("periods") or []
+        if len(periods) < 2:
+            return None
+        lines = [
+            "## 关键词增长与新兴方向", "",
+            f"比较区间：{periods[0].get('start_year')}–{periods[0].get('end_year')} vs. {periods[1].get('start_year')}–{periods[1].get('end_year')}（按论文占比变化排序）", "",
+        ]
+        for i, row in enumerate(rows, 1):
+            tag = "，新兴候选" if row.get("emerging") else ""
+            lines.append(
+                f"{i}. **{row.get('keyword')}**：前期 {row.get('early_count')} 篇，近期 {row.get('late_count')} 篇，"
+                f"占比变化 {float(row.get('share_delta_pp') or 0):+.3f} 个百分点{tag}"
+            )
+        if data.get("partial_year"):
+            lines += ["", f"> {data.get('partial_year')} 年为未完年，已展示原始数据，但未参与增长排序。"]
+        return "\n".join(lines)
+    if op_type == "topic_period_compare":
+        periods = data.get("periods") or []
+        topics = data.get("topics") or []
+        if len(periods) < 2:
+            return None
+        lines = ["## 主题阶段变化", "", f"比较：{periods[0].get('start_year')}–{periods[0].get('end_year')} vs. {periods[1].get('start_year')}–{periods[1].get('end_year')}", ""]
+        for row in topics:
+            delta = float(row.get("share_delta_pp") or 0)
+            trend = "增强" if delta > 0 else ("减弱" if delta < 0 else "持平")
+            lines.append(f"- **{row.get('keyword')}**：{row.get('early_count')} → {row.get('late_count')} 篇，占比{trend} {abs(delta):.3f} 个百分点")
+        return "\n".join(lines)
+    if op_type == "author_topic_summary":
+        rows = data.get("keywords") or []
+        author = data.get("author") or {}
+        if not rows:
+            return None
+        lines = [f"## {author.get('name_zh') or '该作者'}的研究主题", ""]
+        lines += [f"{i}. **{r.get('keyword')}**（{r.get('paper_count')}篇）" for i, r in enumerate(rows, 1)]
+        return "\n".join(lines)
+    if op_type == "author_direction_evolution":
+        author = data.get("author") or {}
+        periods = data.get("periods") or []
+        if not periods:
+            return None
+        lines = [f"## {author.get('name_zh') or '该作者'}研究方向演化", ""]
+        for period in periods:
+            kws = "、".join(f"{r.get('keyword')}（{r.get('paper_count')}篇）" for r in (period.get("keywords") or [])[:6]) or "无足够关键词"
+            lines += [f"### {period.get('label')}（{period.get('start_year')}–{period.get('end_year')}）", "", f"发文 {period.get('paper_count')} 篇；主要主题：{kws}", ""]
+        changes = data.get("changes") or []
+        if changes:
+            lines += ["### 前后期变化", ""]
+            for row in changes[:10]:
+                lines.append(f"- **{row.get('keyword')}**：{row.get('change')}（占比变化 {float(row.get('share_delta_pp') or 0):+.1f} 个百分点）")
+        return "\n".join(lines)
+    if op_type == "author_direction_diversity":
+        rows = data.get("authors") or []
+        if not rows:
+            return None
+        lines = ["## 跨研究方向作者", ""]
+        for i, row in enumerate(rows, 1):
+            kws = "、".join(str(k.get("keyword")) for k in (row.get("keywords") or [])[:6])
+            lines.append(f"{i}. **{row.get('name_zh')}**：{row.get('direction_count')} 个有效方向；{kws}")
+        return "\n".join(lines)
+    if op_type == "institution_stability":
+        rows = data.get("institutions") or []
+        if not rows:
+            return None
+        lines = [f"## 长期高产机构（{data.get('start_year')}–{data.get('end_year')}）", ""]
+        for i, row in enumerate(rows, 1):
+            tag = "稳定高产" if row.get("stable_high_output") else "未达到稳定阈值"
+            lines.append(
+                f"{i}. **{row.get('institution')}**：累计 {row.get('total_papers')} 篇，活跃 {row.get('active_years')} 年，"
+                f"进入年度 Top10 {row.get('top10_years')} 年（{tag}）"
+            )
+        return "\n".join(lines)
+    return None
+
+
+def try_operation_plan_answer(state: JournalState) -> Optional[str]:
+    """Compose every completed structured operation; never short-circuit."""
+    results = list(state.get("operation_results") or [])
+    coverage = dict(state.get("coverage_report") or {})
+    if not results or coverage.get("needs_llm"):
+        return None
+    sections: List[str] = []
+    for result in results:
+        if result.get("status") != "complete":
+            return None
+        op_type = str(result.get("operation") or "")
+        data = dict(result.get("data") or {})
+        rendered = _render_new_operation(op_type, data)
+        if not rendered:
+            temp: JournalState = dict(state)  # type: ignore
+            temp["sql_evidence"] = data
+            temp["query_plan"] = {**(state.get("query_plan") or {}), "task": data.get("task") or op_type, "main_task": op_type}
+            temp["operation_results"] = []
+            rendered = try_author_template_answer(temp)
+        if not rendered:
+            return None
+        if rendered not in sections:
+            sections.append(rendered.strip())
+    return "\n\n".join(sections) if sections else None
+
+
+def ensure_answer_operation_coverage(text: str, state: JournalState) -> str:
+    """Append evidence-backed fallbacks for operations omitted by synthesis."""
+    from app.agents.coverage import assess_answer_coverage
+
+    results = list(state.get("operation_results") or [])
+    report = assess_answer_coverage(text, results)
+    missing = set(report.get("missing_operation_ids") or [])
+    if not missing:
+        return text
+    additions: List[str] = []
+    for result in results:
+        if result.get("op_id") not in missing:
+            continue
+        op_type = str(result.get("operation") or "")
+        status = str(result.get("status") or "partial")
+        data = dict(result.get("data") or {})
+        if status == "complete":
+            section = _render_new_operation(op_type, data)
+            if not section:
+                temp: JournalState = dict(state)  # type: ignore
+                temp["sql_evidence"] = data
+                temp["query_plan"] = {**(state.get("query_plan") or {}), "task": data.get("task") or op_type}
+                temp["operation_results"] = []
+                section = try_author_template_answer(temp)
+            if section:
+                additions.append(section)
+        else:
+            reasons = "；".join(result.get("missing_requirements") or []) or "现有数据不足以完整支持该目标"
+            additions.append(
+                f"## {op_type}\n\n证据不足：{reasons}。基于已有相邻证据只能作为可能趋势或候选判断，不能视为确定事实。"
+            )
+    return (text.rstrip() + "\n\n" + "\n\n".join(additions)).strip() if additions else text
+
+
 def _cleanup_answer(text: str, intents: List[str]) -> str:
     """Strip common unwanted sections the model still emits."""
     if not text:
@@ -1370,6 +1658,14 @@ def build_generate_messages(state: JournalState) -> List[Dict[str, str]]:
     analysis = state.get("analysis_plan") or {}
     analysis_shape = analysis.get("answer_shape") or plan.get("analysis_shape") or ""
     ledger = build_evidence_ledger(state)
+    operation_context = json.dumps(
+        {
+            "operations": state.get("operation_results") or [],
+            "coverage": state.get("coverage_report") or {},
+        },
+        ensure_ascii=False,
+        default=str,
+    )
 
     # intents/reason are for model grounding only — never ask it to echo them.
     user_prompt = (
@@ -1379,16 +1675,21 @@ def build_generate_messages(state: JournalState) -> List[Dict[str, str]]:
         f"{('任务焦点: ' + focus + chr(10)) if focus else ''}"
         f"\n以下是各 Agent 汇总证据:\n{evidence}\n\n"
         f"{ledger}\n\n"
+        f"[必须逐项覆盖的 Operation 及验收状态]\n{operation_context}\n\n"
         f"{_build_instruction(intents, evidence, task, analysis)}\n"
         "必须紧扣用户问题与分析规划做综合推理与升维总结；"
+        "必须按 operation 顺序逐项作答，任何 partial/unsupported/error 都要明确说明。"
+        "允许基于相邻证据作谨慎推断，但必须显式使用“可能”“推测”或“候选”等标记；"
+        "推断不得新增数字、作者、机构、论文、年份或 DOI。"
         "禁止答非所问、套用无关全刊概览，或把证据复述成数据报表。"
         "只输出面向用户的最终答案，不要输出路由、意图、分析规划原文或修正说明。"
     )
     messages: List[Dict[str, str]] = [
         {"role": "system", "content": build_system_prompt(settings.journal_title)}
     ]
+    # chat_max_history counts Q&A turns (pairs); keep that many pairs in context
     max_h = settings.chat_max_history
-    for item in history[-max_h:]:
+    for item in history[-(max_h * 2) :]:
         messages.append(item)
     messages.append({"role": "user", "content": user_prompt})
     return messages
@@ -1400,15 +1701,16 @@ def _chunk_text(text: str, size: int = 48) -> Iterator[str]:
 
 
 def stream_generate(state: JournalState) -> Iterator[str]:
-    templated = try_author_template_answer(state)
+    templated = try_operation_plan_answer(state) or try_author_template_answer(state)
     if templated:
         yield from _chunk_text(enforce_evidence_constraints(templated, state))
         return
     chat = MiniMaxChat(get_settings())
-    yield from chat.chat_stream(
-        build_generate_messages(state),
-        max_tokens=8192,
-    )
+    # Buffer before SSE so coverage/evidence checks apply to the exact answer
+    # eventually shown to the user.
+    raw = chat.chat(build_generate_messages(state), max_tokens=8192)
+    answer = finalize_answer(raw, state.get("intents") or [], state)
+    yield from _chunk_text(answer)
 
 
 def finalize_answer(
@@ -1419,12 +1721,13 @@ def finalize_answer(
     text = _cleanup_answer(raw or "", intents)
     if state is not None:
         text = enforce_evidence_constraints(text, state)
+        text = ensure_answer_operation_coverage(text, state)
     return text
 
 
 def generate_node(state: JournalState) -> Dict[str, Any]:
     intents = state.get("intents") or []
-    templated = try_author_template_answer(state)
+    templated = try_operation_plan_answer(state) or try_author_template_answer(state)
     if templated:
         return {"answer": finalize_answer(templated, intents, state)}
     chat = MiniMaxChat(get_settings())
