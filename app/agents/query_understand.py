@@ -13,6 +13,7 @@ from app.agents.intent_schema import (
     intent_to_entities,
     normalize_intent,
 )
+from app.agents.operation_contracts import CONTRACTS
 from app.agents.state import JournalState
 from app.config import get_settings
 from app.services.minimax_chat import MiniMaxChat
@@ -79,6 +80,7 @@ def llm_fill_intent(
 ) -> Dict[str, Any]:
     """Ask MiniMax for a strict Intent Schema JSON, then normalize."""
     chat = chat or MiniMaxChat(get_settings())
+    allowed_operations = ", ".join(sorted(CONTRACTS))
     prompt = f"""你是期刊问答系统的 Query Understanding 模块。根据用户问题与正则草稿，输出封闭 Intent Schema JSON（不要解释）。
 
 Schema（封闭枚举）:
@@ -112,6 +114,7 @@ Schema（封闭枚举）:
 9. 「近五年/近十年」填 time_range.last_n 或换算 start/end。
 10. confidence：槽位清晰≥0.8；模糊≤0.5。
 11. 复合问题必须拆成多个 requested_operations。例如作者排名及其论文 → top_authors、papers_for_authors；作者论文及研究主题 → author_profile、author_topic_summary。
+12. requested_operations.type 只能从以下白名单选择：{allowed_operations}。不确定时不要创造新名称。
 
 用户问题：{question}
 正则草稿：{json.dumps(draft, ensure_ascii=False)}

@@ -36,3 +36,8 @@ data/*.db-*
 /浙大学报（人文社科）/*.xlsx
 
 /eval/*
+!/eval/1.md
+!/eval/eval1_specs.json
+!/eval/run_eval1_nxb.py
+!/eval/core_user_tasks_specs.json
+!/eval/run_core_user_tasks.py

@@ -71,6 +71,38 @@ class ConversationFlowTests(unittest.TestCase):
         self.assertEqual(intent["selector"], {"ordinal": 3})
         self.assertEqual(plan["author_ids"], [previous["result_set"]["items"][2]["id"]])
 
+    def test_collection_selectors_use_previous_order_only(self):
+        previous = self._top_turn()
+        _, first_two = understand_contextual_turn("列出前两位作者的论文", previous)
+        self.assertEqual(
+            first_two["author_ids"],
+            [row["id"] for row in previous["result_set"]["items"][:2]],
+        )
+        _, last = understand_contextual_turn("列出最后一位作者的论文", previous)
+        self.assertEqual(last["author_ids"], [previous["result_set"]["items"][-1]["id"]])
+        _, most = understand_contextual_turn("列出其中发文最多的作者论文", previous)
+        self.assertEqual(most["author_ids"], [previous["result_set"]["items"][0]["id"]])
+
+    def test_followup_explicit_time_overrides_inherited_time(self):
+        previous = self._top_turn()
+        intent, plan = understand_contextual_turn("列出这些作者近三年的论文", previous)
+        self.assertEqual((plan["year_start"], plan["year_end"]), (2024, 2026))
+        self.assertEqual(
+            intent["explicit_constraints"],
+            {"year_start": 2024, "year_end": 2026},
+        )
+
+    def test_out_of_range_selector_requests_clarification(self):
+        previous = self._top_turn()
+        intent, plan = understand_contextual_turn("展开第 99 位作者", previous)
+        self.assertTrue(intent["needs_clarification"])
+        self.assertEqual(plan["task"], "clarification")
+
+    def test_context_dependent_question_without_result_set_requests_clarification(self):
+        intent, plan = understand_contextual_turn("展开第 3 位作者", None)
+        self.assertTrue(intent["needs_clarification"])
+        self.assertEqual(plan["task"], "clarification")
+
     def test_ambiguous_singular_pronoun_requests_clarification(self):
         previous = self._top_turn()
         intent, plan = understand_contextual_turn("展开他的论文", previous)
@@ -81,7 +113,9 @@ class ConversationFlowTests(unittest.TestCase):
         previous = self._top_turn()
         intent, plan = understand_contextual_turn("近十年机构排名", previous)
         self.assertEqual(intent["kind"], "new_question")
-        self.assertIsNone(plan)
+        self.assertEqual(plan["operations"][0]["type"], "top_institutions")
+        self.assertEqual((plan["year_start"], plan["year_end"]), (2017, 2026))
+        self.assertNotIn("author_ids", plan)
 
     def test_sort_preserves_previous_dois(self):
         previous = {
@@ -111,6 +145,17 @@ class ConversationFlowTests(unittest.TestCase):
         self.assertEqual(intent["action"], "continue")
         self.assertEqual(plan["offset"], 100)
 
+    def test_continue_without_cursor_requests_clarification(self):
+        previous = {
+            "turn_id": "t1",
+            "query_plan": {"task": "topic_papers"},
+            "result_set": {"constraints": {}, "items": []},
+            "continuation": {"has_more": False},
+        }
+        intent, plan = understand_contextual_turn("继续", previous)
+        self.assertTrue(intent["needs_clarification"])
+        self.assertEqual(plan["task"], "clarification")
+
     def test_answer_capacity_sets_continuation_cursor(self):
         class FakeRepo:
             def papers_for_authors(self, author_ids, start_year, end_year):
@@ -138,6 +183,99 @@ class ConversationFlowTests(unittest.TestCase):
         self.assertEqual(result["next_offset"], 100)
         self.assertTrue(result["has_more"])
 
+    def test_topic_papers_list_all_then_continue_without_duplicates(self):
+        class FakeRepo:
+            @staticmethod
+            def papers_by_topics(topics, limit_per_topic, start_year, end_year):
+                papers = [
+                    {
+                        "doi": f"doi-{i}",
+                        "title_zh": f"论文{i}",
+                        "year": 2026,
+                        "authors": ["测试作者"],
+                    }
+                    for i in range(125)
+                ]
+                return {
+                    "scope": "topic_papers",
+                    "topics": [{"topic": topics[0], "paper_count": 125, "papers": papers}],
+                    "papers": papers,
+                    "total_count": 125,
+                    "start_year": start_year,
+                    "end_year": end_year,
+                    "source": "sqlite",
+                }
+
+            @staticmethod
+            def related_keywords_for_topic(topic, limit, start_year, end_year):
+                return []
+
+        state = init_state(
+            "近五年该刊关于马克思的研究有哪些？主要关注什么问题？",
+            journal_id="ZDXBRWB",
+        )
+        first = execute_plan(state["query_plan"], db=FakeRepo())
+        self.assertEqual(first["shown_count"], 100)
+        self.assertEqual(first["total_count"], 125)
+        self.assertTrue(first["has_more"])
+        self.assertEqual(len(first["papers"]), 100)
+
+        result = SimpleNamespace(
+            answer="first",
+            citations=[],
+            evidence={
+                "query_plan": state["query_plan"],
+                "turn_intent": state["turn_intent"],
+                "sql": first,
+            },
+        )
+        previous = build_turn_record("主题论文", result).to_dict()
+        intent, next_plan = understand_contextual_turn("继续", previous)
+        self.assertEqual(intent["action"], "continue")
+        self.assertEqual(next_plan["offset"], 100)
+        second = execute_plan(next_plan, db=FakeRepo())
+        self.assertEqual(second["shown_count"], 25)
+        self.assertFalse(second["has_more"])
+        self.assertFalse(
+            {paper["doi"] for paper in first["papers"]}
+            & {paper["doi"] for paper in second["papers"]}
+        )
+
+    def test_multi_operation_paper_list_continues_only_truncated_operation(self):
+        question = "近十年核心作者和研究团队有哪些？他们的研究方向发生了什么变化？"
+        state = init_state(question, journal_id="ZDXBNXB")
+        first = execute_plan(state["query_plan"], question, state["entities"], self.repo)
+        paper_op = first["operation_data"]["op_2_papers_for_authors"]
+        self.assertTrue(paper_op["has_more"])
+        result = SimpleNamespace(
+            answer="first",
+            citations=[],
+            evidence={
+                "query_plan": state["query_plan"],
+                "turn_intent": state["turn_intent"],
+                "sql": first,
+            },
+        )
+        previous = build_turn_record(question, result).to_dict()
+        _, next_plan = understand_contextual_turn("继续", previous)
+        self.assertEqual(
+            [op["type"] for op in next_plan["operations"]],
+            ["papers_for_authors"],
+        )
+        second = execute_plan(next_plan, "继续", {}, self.repo)
+        self.assertFalse(second["has_more"])
+        first_rows = {
+            (group["author_id"], paper["doi"])
+            for group in paper_op["authors"]
+            for paper in group["papers"]
+        }
+        second_rows = {
+            (group["author_id"], paper["doi"])
+            for group in second["authors"]
+            for paper in group["papers"]
+        }
+        self.assertFalse(first_rows & second_rows)
+
     def test_store_isolation_reset_and_edit_truncation(self):
         store = ConversationStore()
         first = build_turn_record(
@@ -158,6 +296,51 @@ class ConversationFlowTests(unittest.TestCase):
         self.assertEqual(len(store.get("c2", "ZDXBNXB").turns), 1)
         self.assertEqual(len(store.get("c1", "ZDXBRWB").turns), 0)
         self.assertEqual(len(store.reset("c1", "ZDXBNXB").turns), 0)
+
+    def test_edit_with_unanswered_user_turn_keeps_exact_prefix(self):
+        store = ConversationStore()
+        first = build_turn_record("q1", SimpleNamespace(answer="a1", citations=[], evidence={}))
+        second = build_turn_record("q2", SimpleNamespace(answer="a2", citations=[], evidence={}))
+        store.append("c1", "ZDXBNXB", first)
+        store.append("c1", "ZDXBNXB", second)
+        state = store.reconcile_history(
+            "c1",
+            "ZDXBNXB",
+            [
+                {"role": "user", "content": "q1"},
+                {"role": "assistant", "content": "a1"},
+                {"role": "user", "content": "q2 edited"},
+            ],
+        )
+        self.assertEqual([turn.question for turn in state.turns], ["q1"])
+
+    def test_store_enforces_session_and_turn_caps(self):
+        store = ConversationStore(max_sessions=2, max_turns=2)
+        for index in range(3):
+            for turn_index in range(3):
+                store.append(
+                    f"c{index}",
+                    "ZDXBNXB",
+                    build_turn_record(
+                        f"q{turn_index}",
+                        SimpleNamespace(answer=f"a{turn_index}", citations=[], evidence={}),
+                    ),
+                )
+        self.assertLessEqual(len(store._items), 2)
+        self.assertLessEqual(len(store.get("c2", "ZDXBNXB").turns), 2)
+
+    def test_turn_record_preserves_operation_evidence(self):
+        result = SimpleNamespace(
+            answer="a",
+            citations=[],
+            evidence={
+                "operation_results": [{"op_id": "op_1", "status": "complete"}],
+                "coverage_report": {"coverage": 1.0},
+            },
+        )
+        turn = build_turn_record("q", result).to_dict()
+        self.assertEqual(turn["operation_results"][0]["op_id"], "op_1")
+        self.assertEqual(turn["coverage_report"]["coverage"], 1.0)
 
     def test_invalid_journal_is_400(self):
         with self.assertRaises(HTTPException) as caught:

@@ -10,7 +10,6 @@ from app.agents.state import JournalState
 from app.agents.understand import (
     _restore_author_pair,
     extract_year_window,
-    llm_confirm_entities,
     regex_extract,
 )
 from app.config import bind_corpus
@@ -157,15 +156,12 @@ def extract_node(state: JournalState) -> Dict[str, Any]:
         return {"entities": entities, "stage": "extracted"}
     prior = (state.get("entities") or {}).get("dois") or []
     draft = regex_extract(question, prior)
-    try:
-        entities = llm_confirm_entities(question, draft)
-    except Exception as e:
-        entities = dict(draft)
-        entities["confirmed_intents"] = []
-        entities["extract_meta"] = {
-            "llm_confirmed": False,
-            "fixes": f"llm确认失败: {e}",
-        }
+    entities = dict(draft)
+    entities["extract_meta"] = {
+        "regex_draft": draft,
+        "llm_confirmed": False,
+        "fixes": "实体确认并入统一 Query Understanding",
+    }
     entities = _restore_author_pair(question, entities, draft)
     return {"entities": entities, "stage": "extracted"}
 

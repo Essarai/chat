@@ -33,10 +33,14 @@ def collect_allowed_numbers(state: Dict[str, Any]) -> Set[str]:
         try:
             if isinstance(n, float):
                 allowed.add(str(n))
+                allowed.add(str(abs(n)))
                 if n == int(n):
                     allowed.add(str(int(n)))
+                    allowed.add(str(abs(int(n))))
             else:
-                allowed.add(str(int(n)))
+                value = int(n)
+                allowed.add(str(value))
+                allowed.add(str(abs(value)))
         except (TypeError, ValueError):
             s = str(n).strip()
             if re.fullmatch(r"-?\d+(\.\d+)?", s):
@@ -48,6 +52,15 @@ def collect_allowed_numbers(state: Dict[str, Any]) -> Set[str]:
         if isinstance(obj, dict):
             for k, v in obj.items():
                 lk = str(k).lower()
+                if isinstance(v, list) and lk in {
+                    "papers", "recent_papers", "sample_papers", "direct_papers",
+                    "adjacent_papers", "generic_only_papers", "authors", "institutions",
+                    "keywords", "edges", "collaborators", "periods", "directions", "topics", "years",
+                }:
+                    add(len(v))
+                if any(token in lk for token in ("title", "keyword", "label", "name", "institution")) and isinstance(v, str):
+                    for token in re.findall(r"-?\d+(?:\.\d+)?", v):
+                        add(token)
                 if any(
                     x in lk
                     for x in (
@@ -74,6 +87,38 @@ def collect_allowed_numbers(state: Dict[str, Any]) -> Set[str]:
     y0, y1 = _year_window(state)
     add(y0)
     add(y1)
+    return allowed
+
+
+def collect_allowed_labels(state: Dict[str, Any]) -> Set[str]:
+    """Collect exact structured labels allowed in ranked/list answer rows."""
+    allowed: Set[str] = set()
+    label_keys = {
+        "title", "title_zh", "title_en", "name", "name_zh", "name_en",
+        "author_name", "institution", "keyword", "topic", "source_name",
+        "target_name",
+    }
+
+    def walk(obj: Any, parent: str = "", depth: int = 0) -> None:
+        if depth > 9:
+            return
+        if isinstance(obj, dict):
+            for key, value in obj.items():
+                normalized = str(key).lower()
+                if normalized in label_keys and isinstance(value, str) and value.strip():
+                    allowed.add(value.strip())
+                walk(value, normalized, depth + 1)
+        elif isinstance(obj, list):
+            for value in obj[:500]:
+                if parent == "authors" and isinstance(value, str) and value.strip():
+                    allowed.add(value.strip())
+                else:
+                    walk(value, parent, depth + 1)
+
+    walk(state.get("sql_evidence") or {})
+    walk(state.get("kg_evidence") or {})
+    walk(state.get("rag_evidence") or {})
+    walk(state.get("operation_results") or [])
     return allowed
 
 
@@ -158,16 +203,43 @@ def collect_allowed_papers(state: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     # Canonical multi-operation evidence may be namespaced instead of flattened.
     for result in state.get("operation_results") or []:
         data = result.get("data") or {}
-        for p in data.get("papers") or data.get("recent_papers") or []:
-            add_paper(p.get("doi"), p.get("title_zh") or p.get("title"), p.get("year"))
+        for key in (
+            "papers", "recent_papers", "sample_papers", "direct_papers",
+            "adjacent_papers", "generic_only_papers",
+        ):
+            for p in data.get(key) or []:
+                add_paper(p.get("doi"), p.get("title_zh") or p.get("title"), p.get("year"))
         for direction in data.get("directions") or []:
             for p in direction.get("papers") or []:
                 add_paper(p.get("doi"), p.get("title_zh") or p.get("title"), p.get("year"))
+        for topic in data.get("topics") or []:
+            if isinstance(topic, dict):
+                for p in topic.get("papers") or []:
+                    add_paper(p.get("doi"), p.get("title_zh") or p.get("title"), p.get("year"))
         for author_row in data.get("authors") or []:
             if not isinstance(author_row, dict):
                 continue
             for p in author_row.get("papers") or []:
                 add_paper(p.get("doi"), p.get("title_zh") or p.get("title"), p.get("year"))
+            evolution = author_row.get("evolution") or author_row
+            for period in evolution.get("periods") or []:
+                for p in period.get("papers") or []:
+                    add_paper(p.get("doi"), p.get("title_zh") or p.get("title"), p.get("year"))
+            for collaborator in author_row.get("collaborators") or []:
+                for p in collaborator.get("papers") or []:
+                    add_paper(p.get("doi"), p.get("title_zh") or p.get("title"), p.get("year"))
+        for collaborator in data.get("collaborators") or []:
+            if isinstance(collaborator, dict):
+                for p in collaborator.get("papers") or []:
+                    add_paper(p.get("doi"), p.get("title_zh") or p.get("title"), p.get("year"))
+        for institution in data.get("institutions") or []:
+            if isinstance(institution, dict):
+                for p in institution.get("papers") or []:
+                    add_paper(p.get("doi"), p.get("title_zh") or p.get("title"), p.get("year"))
+        for edge in data.get("edges") or []:
+            if isinstance(edge, dict):
+                for p in edge.get("papers") or []:
+                    add_paper(p.get("doi"), p.get("title_zh") or p.get("title"), p.get("year"))
         for period in data.get("periods") or []:
             for p in period.get("papers") or []:
                 add_paper(p.get("doi"), p.get("title_zh") or p.get("title"), p.get("year"))

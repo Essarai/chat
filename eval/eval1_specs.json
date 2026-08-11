@@ -1,0 +1,307 @@
+[
+  {
+    "id": 1,
+    "expected_intent": {"kind": "new_question", "action": "query", "target_entity": "journal"},
+    "required_operations": ["yearly_counts", "yoy_growth"],
+    "forbidden_operations": ["semantic_search"],
+    "constraints": {"year_start": 2007, "year_end": 2026, "topics": []},
+    "result_set": {"type": "yearly_growth", "required_fields": [], "required_data_fields": ["yearly", "yoy"]},
+    "expected_coverage": {"min_rgc": 1.0, "allowed_statuses": ["complete"]},
+    "answer_targets": [{"name": "逐年数量", "any": ["逐年发文", "年度发文"]}, {"name": "最快增长", "any": ["增长最快", "同比"]}]
+  },
+  {
+    "id": 2,
+    "expected_intent": {"kind": "new_question", "action": "query", "target_entity": "journal"},
+    "required_operations": ["yearly_counts", "yoy_growth"],
+    "forbidden_operations": ["semantic_search"],
+    "constraints": {"year_start": 2017, "year_end": 2026, "topics": []},
+    "result_set": {"type": "yearly_growth", "required_fields": [], "required_data_fields": ["yearly", "yoy"]},
+    "expected_coverage": {"min_rgc": 1.0, "allowed_statuses": ["complete"]},
+    "answer_targets": [{"name": "趋势", "any": ["逐年发文", "年度发文"]}, {"name": "变化", "any": ["同比", "增长", "下降"]}]
+  },
+  {
+    "id": 3,
+    "expected_intent": {"kind": "new_question", "action": "query", "target_entity": "topic"},
+    "required_operations": ["top_keywords", "papers_by_top_keywords"],
+    "forbidden_operations": ["topic_papers", "semantic_search"],
+    "constraints": {"year_start": 2022, "year_end": 2026, "topics": []},
+    "result_set": {"type": "hot_topics", "required_fields": ["id", "name", "paper_count"]},
+    "expected_coverage": {"min_rgc": 1.0, "allowed_statuses": ["complete"]},
+    "answer_targets": [{"name": "方向排名", "any": ["热门关键词", "研究方向"]}, {"name": "代表论文", "any": ["代表论文", "DOI"]}]
+  },
+  {
+    "id": 4,
+    "expected_intent": {"kind": "new_question", "action": "query", "target_entity": "author"},
+    "required_operations": ["top_authors"],
+    "forbidden_operations": ["semantic_search", "top_institutions"],
+    "constraints": {"year_start": null, "year_end": null, "topics": []},
+    "result_set": {"type": "top_authors", "required_fields": ["id", "name", "paper_count", "position"]},
+    "expected_coverage": {"min_rgc": 1.0, "allowed_statuses": ["complete"]},
+    "answer_targets": [{"name": "作者排名", "any": ["作者", "发文量"]}, {"name": "稳定标识", "any": ["author_id"]}]
+  },
+  {
+    "id": 5,
+    "expected_intent": {"kind": "new_question", "action": "query", "target_entity": "institution"},
+    "required_operations": ["top_institutions"],
+    "forbidden_operations": ["semantic_search", "top_authors"],
+    "constraints": {"year_start": 2017, "year_end": 2026, "topics": []},
+    "result_set": {"type": "top_institutions", "required_fields": ["id", "name", "paper_count", "position"]},
+    "expected_coverage": {"min_rgc": 1.0, "allowed_statuses": ["complete"]},
+    "answer_targets": [{"name": "机构排名", "any": ["机构发文量", "机构"]}, {"name": "统计范围", "any": ["2017", "2026"]}]
+  },
+  {
+    "id": 6,
+    "expected_intent": {"kind": "new_question", "action": "query", "target_entity": "institution"},
+    "required_operations": ["institution_authors"],
+    "forbidden_operations": ["top_authors", "semantic_search"],
+    "constraints": {"year_start": null, "year_end": null, "topics": [], "institution": "浙江大学"},
+    "result_set": {"type": "institution_authors", "required_fields": ["doi", "title", "year"]},
+    "expected_coverage": {"min_rgc": 1.0, "allowed_statuses": ["complete"]},
+    "answer_targets": [{"name": "机构对象", "any": ["浙江大学"]}, {"name": "代表论文", "any": ["代表成果", "DOI"]}]
+  },
+  {
+    "id": 7,
+    "expected_intent": {"kind": "new_question", "action": "query", "target_entity": "author"},
+    "required_operations": ["author_profile", "author_papers", "author_topic_summary"],
+    "forbidden_operations": ["top_authors", "semantic_search"],
+    "constraints": {"year_start": null, "year_end": null, "topics": [], "author_name": "徐建明"},
+    "result_set": {"type": "author_profile", "required_fields": ["doi", "title", "year"]},
+    "expected_coverage": {"min_rgc": 1.0, "allowed_statuses": ["complete"]},
+    "answer_targets": [{"name": "作者身份", "any": ["author_id", "徐建明"]}, {"name": "论文", "any": ["作者论文", "DOI"]}, {"name": "主题", "any": ["研究主题"]}]
+  },
+  {
+    "id": 8,
+    "expected_intent": {"kind": "new_question", "action": "query", "target_entity": "author"},
+    "required_operations": ["coauthored_papers"],
+    "forbidden_operations": ["top_authors", "semantic_search"],
+    "constraints": {"year_start": null, "year_end": null, "topics": [], "author_name": "徐建明", "author_name_b": "施加春"},
+    "result_set": {"type": "coauthored_papers", "required_fields": ["doi", "title", "year"]},
+    "expected_coverage": {"min_rgc": 1.0, "allowed_statuses": ["complete"]},
+    "answer_targets": [{"name": "两位作者", "all": ["徐建明", "施加春"]}, {"name": "共同论文", "any": ["合著", "共同", "DOI"]}]
+  },
+  {
+    "id": 9,
+    "expected_intent": {"kind": "new_question", "action": "query", "target_entity": "topic"},
+    "required_operations": ["topic_keyword_counts", "topic_yearly"],
+    "forbidden_operations": ["yearly_counts", "top_authors"],
+    "constraints": {"year_start": 2022, "year_end": 2026, "topics": ["水稻"]},
+    "result_set": {"type": "topic_evolution", "required_fields": [], "required_data_fields": ["topic_keywords", "yearly_by_keyword"]},
+    "expected_coverage": {"min_rgc": 1.0, "allowed_statuses": ["complete"]},
+    "answer_targets": [{"name": "主题", "any": ["水稻"]}, {"name": "逐年趋势", "any": ["主题年度变化", "逐年命中", "主题趋势"]}]
+  },
+  {
+    "id": 10,
+    "expected_intent": {"kind": "new_question", "action": "query", "target_entity": "journal"},
+    "required_operations": ["top_keywords", "keyword_growth"],
+    "forbidden_operations": ["semantic_search"],
+    "forbidden_topics": ["热门关键词"],
+    "constraints": {"year_start": 2017, "year_end": 2026, "topics": []},
+    "result_set": {"type": "hot_topics", "required_fields": ["id", "name", "paper_count"]},
+    "expected_coverage": {"min_rgc": 1.0, "allowed_statuses": ["complete"]},
+    "answer_targets": [{"name": "关键词排名", "any": ["热门关键词"]}, {"name": "增长", "any": ["关键词增长", "新兴方向"]}]
+  },
+  {
+    "id": 11,
+    "expected_intent": {"kind": "new_question", "action": "query", "target_entity": "topic"},
+    "required_operations": ["yearly_counts", "top_keywords", "keyword_growth", "topic_period_compare", "representative_papers_by_topic"],
+    "forbidden_operations": ["semantic_search"],
+    "forbidden_topics": ["研究热点"],
+    "constraints": {"year_start": 2007, "year_end": 2026, "topics": []},
+    "result_set": {"type": "generic", "required_fields": ["id", "name", "paper_count"]},
+    "expected_coverage": {"min_rgc": 1.0, "allowed_statuses": ["complete"]},
+    "answer_targets": [{"name": "热点变化", "any": ["主题阶段", "热点变化"]}, {"name": "增强减弱", "all": ["增强", "减弱"]}, {"name": "代表论文", "any": ["代表论文", "DOI"]}]
+  },
+  {
+    "id": 12,
+    "expected_intent": {"kind": "new_question", "action": "query", "target_entity": "topic"},
+    "required_operations": ["topic_keyword_counts", "topic_yearly"],
+    "forbidden_operations": ["yearly_counts", "semantic_search"],
+    "constraints": {"year_start": null, "year_end": null, "topics": ["水稻"]},
+    "result_set": {"type": "topic_evolution", "required_fields": [], "required_data_fields": ["topic_keywords", "yearly_by_keyword"]},
+    "expected_coverage": {"min_rgc": 1.0, "allowed_statuses": ["complete"]},
+    "answer_targets": [{"name": "主题", "any": ["水稻"]}, {"name": "趋势", "any": ["主题年度变化", "逐年命中", "主题趋势"]}]
+  },
+  {
+    "id": 13,
+    "expected_intent": {"kind": "new_question", "action": "query", "target_entity": "topic"},
+    "required_operations": ["topic_keyword_counts", "topic_yearly"],
+    "forbidden_operations": ["yearly_counts", "semantic_search"],
+    "constraints": {"year_start": null, "year_end": null, "topics": ["人工智能"]},
+    "result_set": {"type": "topic_evolution", "required_fields": [], "required_data_fields": ["topic_keywords", "yearly_by_keyword"]},
+    "expected_coverage": {"min_rgc": 0.5, "allowed_statuses": ["complete", "partial"]},
+    "answer_targets": [{"name": "主题", "any": ["人工智能"]}, {"name": "稀疏限制", "any": ["证据不足", "数据不足", "逐年命中"]}]
+  },
+  {
+    "id": 14,
+    "expected_intent": {"kind": "new_question", "action": "compare", "target_entity": "topic"},
+    "required_operations": ["topic_period_compare", "topic_yearly", "representative_papers_by_topic"],
+    "forbidden_operations": ["top_keywords", "semantic_search"],
+    "constraints": {"year_start": 2006, "year_end": 2025, "topics": []},
+    "result_set": {"type": "generic", "required_fields": ["id", "name", "paper_count"]},
+    "expected_coverage": {"min_rgc": 1.0, "allowed_statuses": ["complete"]},
+    "answer_targets": [{"name": "阶段", "all": ["2006–2015", "2016–2025"]}, {"name": "差异", "all": ["增强", "减弱"]}, {"name": "论文", "any": ["代表论文", "DOI"]}]
+  },
+  {
+    "id": 15,
+    "expected_intent": {"kind": "new_question", "action": "query", "target_entity": "topic"},
+    "required_operations": ["keyword_growth", "topic_period_compare", "papers_by_top_keywords", "representative_authors_by_topic"],
+    "forbidden_operations": ["semantic_search"],
+    "forbidden_topics": ["新兴研究方向"],
+    "constraints": {"year_start": 2022, "year_end": 2026, "topics": []},
+    "result_set": {"type": "hot_topics", "required_fields": ["id", "name", "paper_count"]},
+    "expected_coverage": {"min_rgc": 1.0, "allowed_statuses": ["complete"]},
+    "answer_targets": [{"name": "增长", "any": ["关键词增长", "新兴方向"]}, {"name": "作者", "any": ["代表作者"]}, {"name": "论文", "any": ["代表论文", "DOI"]}]
+  },
+  {
+    "id": 16,
+    "expected_intent": {"kind": "new_question", "action": "query", "target_entity": "topic"},
+    "required_operations": ["keyword_growth", "topic_period_compare", "papers_by_top_keywords", "representative_authors_by_topic"],
+    "forbidden_operations": ["semantic_search"],
+    "forbidden_topics": ["未来研究方向"],
+    "constraints": {"year_start": null, "year_end": null, "topics": []},
+    "result_set": {"type": "hot_topics", "required_fields": ["id", "name", "paper_count"]},
+    "expected_coverage": {"min_rgc": 1.0, "allowed_statuses": ["complete"]},
+    "answer_targets": [{"name": "候选措辞", "any": ["候选", "可能", "值得关注"]}, {"name": "增长证据", "any": ["占比", "关键词增长"]}, {"name": "限制", "any": ["不代表全学科", "市场的未来趋势"]}]
+  },
+  {
+    "id": 17,
+    "expected_intent": {"kind": "new_question", "action": "compare", "target_entity": "topic"},
+    "required_operations": ["topic_yearly", "topic_period_compare", "representative_papers_by_topic"],
+    "forbidden_operations": ["top_keywords", "semantic_search"],
+    "constraints": {"year_start": null, "year_end": null, "topics": ["传统农业", "智能农业"]},
+    "result_set": {"type": "topic_evolution", "required_fields": ["id", "name", "paper_count"]},
+    "expected_coverage": {"min_rgc": 0.5, "allowed_statuses": ["partial"]},
+    "answer_targets": [{"name": "比较对象", "all": ["传统农业", "智能农业"]}, {"name": "不足", "any": ["证据不足", "无直接命中", "命中很少"]}]
+  },
+  {
+    "id": 18,
+    "expected_intent": {"kind": "new_question", "action": "query", "target_entity": "topic"},
+    "required_operations": ["submission_fit", "topic_yearly", "submission_guidance"],
+    "forbidden_operations": ["semantic_search", "top_authors"],
+    "constraints": {"year_start": null, "year_end": null, "topics": ["人工智能赋能农业"]},
+    "result_set": {"type": "submission_fit", "required_fields": ["doi", "title", "year"]},
+    "expected_coverage": {"min_rgc": 0.8, "allowed_statuses": ["complete", "partial"]},
+    "answer_targets": [{"name": "直接与相邻", "all": ["直接主题", "相邻检索词"]}, {"name": "建议", "any": ["投稿建议", "判断"]}, {"name": "非承诺", "any": ["不代表", "不承诺", "录用承诺"]}]
+  },
+  {
+    "id": 19,
+    "expected_intent": {"kind": "new_question", "action": "query", "target_entity": "topic"},
+    "required_operations": ["submission_fit", "topic_yearly", "topic_papers", "submission_guidance"],
+    "forbidden_operations": ["semantic_search", "top_authors"],
+    "constraints": {"year_start": null, "year_end": null, "topics": ["基因编辑"]},
+    "result_set": {"type": "submission_fit", "required_fields": ["doi", "title", "year"]},
+    "expected_coverage": {"min_rgc": 1.0, "allowed_statuses": ["complete"]},
+    "answer_targets": [{"name": "匹配", "any": ["投稿适配", "匹配"]}, {"name": "论文", "any": ["主题论文", "DOI"]}, {"name": "非承诺", "any": ["录用承诺", "不代表当前编辑政策"]}]
+  },
+  {
+    "id": 20,
+    "expected_intent": {"kind": "new_question", "action": "query", "target_entity": "topic"},
+    "required_operations": ["submission_fit", "topic_yearly", "topic_papers", "submission_guidance"],
+    "forbidden_operations": ["semantic_search", "top_authors"],
+    "constraints": {"year_start": null, "year_end": null, "topics": ["农业机器人"]},
+    "result_set": {"type": "submission_fit", "required_fields": [], "required_data_fields": ["topic_keywords"]},
+    "expected_coverage": {"min_rgc": 0.7, "allowed_statuses": ["complete", "partial"]},
+    "answer_targets": [{"name": "主题", "any": ["农业机器人"]}, {"name": "无结果说明", "any": ["证据不足", "无可追溯论文", "命中"]}, {"name": "建议", "any": ["投稿建议", "建议"]}]
+  },
+  {
+    "id": 21,
+    "expected_intent": {"kind": "new_question", "action": "query", "target_entity": "author"},
+    "required_operations": ["authors_by_keyword", "institutions_by_keyword", "author_network", "institution_network", "coauthored_papers"],
+    "forbidden_operations": ["top_authors", "semantic_search"],
+    "constraints": {"year_start": null, "year_end": null, "topics": ["水稻"]},
+    "result_set": {"type": "generic", "required_fields": ["id", "name", "paper_count"]},
+    "expected_coverage": {"min_rgc": 1.0, "allowed_statuses": ["complete"]},
+    "answer_targets": [{"name": "主题作者", "any": ["代表作者", "相关作者"]}, {"name": "合作网络", "any": ["作者合作网络", "共同"]}, {"name": "共同论文", "any": ["合作论文", "DOI"]}]
+  },
+  {
+    "id": 22,
+    "expected_intent": {"kind": "new_question", "action": "query", "target_entity": "author"},
+    "required_operations": ["authors_by_keyword", "institutions_by_keyword", "author_network", "institution_network", "coauthored_papers"],
+    "forbidden_operations": ["top_authors", "semantic_search"],
+    "constraints": {"year_start": null, "year_end": null, "topics": ["人工智能"]},
+    "result_set": {"type": "generic", "required_fields": ["id", "name", "paper_count"]},
+    "expected_coverage": {"min_rgc": 1.0, "allowed_statuses": ["complete"]},
+    "answer_targets": [{"name": "主题团队", "any": ["代表作者", "相关作者"]}, {"name": "合作", "any": ["作者合作网络", "共同"]}, {"name": "边界", "any": ["网络边界", "ResultSet"]}]
+  },
+  {
+    "id": 23,
+    "expected_intent": {"kind": "new_question", "action": "query", "target_entity": "institution"},
+    "required_operations": ["top_institutions", "institution_network", "representative_papers_by_institution"],
+    "forbidden_operations": ["semantic_search", "top_authors"],
+    "constraints": {"year_start": null, "year_end": null, "topics": []},
+    "result_set": {"type": "generic", "required_fields": ["id", "name", "paper_count"]},
+    "expected_coverage": {"min_rgc": 1.0, "allowed_statuses": ["complete"]},
+    "answer_targets": [{"name": "机构", "any": ["机构发文量", "机构"]}, {"name": "合作边", "any": ["机构合作网络", "共同"]}, {"name": "论文", "any": ["代表论文", "DOI"]}]
+  },
+  {
+    "id": 24,
+    "expected_intent": {"kind": "new_question", "action": "query", "target_entity": "institution"},
+    "required_operations": ["institution_stability", "top_institutions", "representative_papers_by_institution"],
+    "forbidden_operations": ["semantic_search"],
+    "constraints": {"year_start": 2016, "year_end": 2025, "topics": []},
+    "result_set": {"type": "top_institutions", "required_fields": ["id", "name", "paper_count", "stable_high_output"]},
+    "expected_coverage": {"min_rgc": 1.0, "allowed_statuses": ["complete"]},
+    "answer_targets": [{"name": "定义", "all": ["活跃年份率", "进入年度 Top10"]}, {"name": "阈值", "all": ["80%", "50%"]}, {"name": "论文", "any": ["代表论文", "DOI"]}]
+  },
+  {
+    "id": 25,
+    "expected_intent": {"kind": "new_question", "action": "query", "target_entity": "author"},
+    "required_operations": ["author_profile", "author_collaborators"],
+    "forbidden_operations": ["top_authors", "semantic_search"],
+    "constraints": {"year_start": null, "year_end": null, "topics": [], "author_name": "徐建明"},
+    "result_set": {"type": "author_profile", "required_fields": ["doi", "title", "year"]},
+    "expected_coverage": {"min_rgc": 1.0, "allowed_statuses": ["complete"]},
+    "answer_targets": [{"name": "身份", "all": ["徐建明", "author_id"]}, {"name": "合作伙伴", "any": ["主要合作者", "合作伙伴"]}, {"name": "共同数量", "any": ["共同"]}]
+  },
+  {
+    "id": 26,
+    "expected_intent": {"kind": "new_question", "action": "query", "target_entity": "author"},
+    "required_operations": ["author_profile", "author_topic_summary", "author_direction_evolution"],
+    "forbidden_operations": ["top_authors", "semantic_search"],
+    "constraints": {"year_start": null, "year_end": null, "topics": [], "author_name": "徐建明"},
+    "result_set": {"type": "author_profile", "required_fields": ["doi", "title", "year"]},
+    "expected_coverage": {"min_rgc": 1.0, "allowed_statuses": ["complete"]},
+    "answer_targets": [{"name": "身份", "all": ["徐建明", "author_id"]}, {"name": "分阶段", "all": ["早期", "中期", "近期"]}, {"name": "变化", "any": ["方向演化", "前后期变化"]}]
+  },
+  {
+    "id": 27,
+    "expected_intent": {"kind": "new_question", "action": "query", "target_entity": "author"},
+    "required_operations": ["top_authors", "author_network", "coauthored_papers"],
+    "forbidden_operations": ["semantic_search", "author_keywords_sample"],
+    "constraints": {"year_start": null, "year_end": null, "topics": []},
+    "result_set": {"type": "generic", "required_fields": ["id", "name", "paper_count"]},
+    "expected_coverage": {"min_rgc": 0.8, "allowed_statuses": ["complete", "partial"]},
+    "answer_targets": [{"name": "核心作者", "any": ["作者", "发文量"]}, {"name": "网络", "any": ["作者合作网络", "合作关系"]}, {"name": "不足", "any": ["证据不足", "合作论文", "共同"]}]
+  },
+  {
+    "id": 28,
+    "expected_intent": {"kind": "new_question", "action": "query", "target_entity": "author"},
+    "required_operations": ["author_direction_diversity"],
+    "forbidden_operations": ["top_keywords", "top_authors", "semantic_search"],
+    "constraints": {"year_start": null, "year_end": null, "topics": []},
+    "result_set": {"type": "author_direction_diversity", "required_fields": ["id", "name", "paper_count", "direction_count"]},
+    "expected_coverage": {"min_rgc": 1.0, "allowed_statuses": ["complete"]},
+    "answer_targets": [{"name": "跨方向作者", "any": ["跨研究方向作者", "有效方向"]}, {"name": "方向数", "any": ["个有效方向"]}]
+  },
+  {
+    "id": 29,
+    "expected_intent": {"kind": "new_question", "action": "query", "target_entity": "journal"},
+    "required_operations": ["journal_overview", "top_authors", "author_network", "keyword_growth", "topic_period_compare"],
+    "forbidden_operations": ["semantic_search"],
+    "constraints": {"year_start": null, "year_end": null, "topics": []},
+    "result_set": {"type": "journal_overview", "required_fields": ["id", "name", "paper_count"]},
+    "expected_coverage": {"min_rgc": 1.0, "allowed_statuses": ["complete"]},
+    "answer_targets": [{"name": "历程", "any": ["学术发展概览", "阶段演进"]}, {"name": "作者团队", "any": ["作者合作网络", "作者"]}, {"name": "未来趋势", "any": ["关键词增长", "候选"]}]
+  },
+  {
+    "id": 30,
+    "expected_intent": {"kind": "new_question", "action": "query", "target_entity": "journal"},
+    "required_operations": ["journal_overview", "top_keywords", "submission_guidance"],
+    "forbidden_operations": ["semantic_search"],
+    "forbidden_topics": ["优势领域", "研究热点"],
+    "constraints": {"year_start": null, "year_end": null, "topics": []},
+    "result_set": {"type": "journal_overview", "required_fields": [], "required_data_fields": ["yearly", "keywords"]},
+    "expected_coverage": {"min_rgc": 0.8, "allowed_statuses": ["complete", "partial"]},
+    "answer_targets": [{"name": "优势领域", "any": ["热门关键词", "优势领域", "高频主题", "近期相对走强"]}, {"name": "期刊概览", "any": ["学术发展概览", "阶段演进"]}, {"name": "投稿建议", "any": ["投稿建议", "证据不足"]}]
+  }
+]

@@ -209,6 +209,7 @@ def extract_quoted_topic_phrase(question: str) -> Optional[str]:
         r"研究方向[是为：:\s]*[“\"「]([^”\"」]{2,40})[”\"」]",
         r"(?:论文)?主题[是为：:\s]+([^\s，。；？?]{2,40})",
         r"研究方向[是为：:\s]+([^\s，。；？?]{2,40})",
+        r"适合([^，。；？?]{2,20}?)(?:方向)?投稿",
     ):
         m = re.search(pat, q)
         if m:
@@ -239,6 +240,13 @@ def expand_submission_keywords(question: str, topics: Optional[List[str]] = None
     phrase = extract_quoted_topic_phrase(q)
     bag = " ".join([phrase or "", " ".join(topics or []), q])
 
+    # Preserve the user's compound topic as the direct-match slot before
+    # adding broader lexical facets (e.g. 植物基因编辑 → 基因编辑).
+    if phrase:
+        compound = _clean_topic(phrase)
+        if compound:
+            _add(compound)
+
     # Domain lexicon hits inside phrase/question
     for term in _SUBMISSION_DOMAIN_TERMS:
         if term.lower() in bag.lower() or term in bag:
@@ -251,6 +259,11 @@ def expand_submission_keywords(question: str, topics: Optional[List[str]] = None
         _add("病害")
     if "智能" in bag and "农业" in bag:
         _add("智能农业")
+    if "智慧农业" in bag:
+        _add("智慧农业")
+        _add("智能农业")
+        _add("数字农业")
+        _add("人工智能")
 
     # Keep short cleaned topics from schema
     for t in topics or []:

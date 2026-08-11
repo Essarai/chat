@@ -30,6 +30,7 @@ class JournalState(TypedDict, total=False):
     analysis_plan: Dict[str, Any]  # analysis subgoals (answer-side), not sql_ops
     operation_results: List[Dict[str, Any]]
     coverage_report: Dict[str, Any]
+    quality_report: Dict[str, Any]
     result_set: Dict[str, Any]
 
     # specialist evidence

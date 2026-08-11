@@ -108,6 +108,45 @@ class SQLiteRepo:
         with self._conn() as conn:
             return self._rows(conn.execute(sql, params))
 
+    def related_keywords_for_topic(
+        self,
+        topic: str,
+        limit: int = 10,
+        start_year: Optional[int] = None,
+        end_year: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Keywords co-occurring on papers matched by a parent topic."""
+        value = str(topic or "").strip()
+        if not value:
+            return []
+        clauses = ["seed.label_zh LIKE ?", "related.label_zh IS NOT NULL", "related.label_zh <> ''"]
+        params: List[Any] = [f"%{value}%"]
+        if start_year is not None:
+            clauses.append("p.year >= ?")
+            params.append(start_year)
+        if end_year is not None:
+            clauses.append("p.year <= ?")
+            params.append(end_year)
+        params.extend([f"%{value}%", limit])
+        with self._conn() as conn:
+            return self._rows(
+                conn.execute(
+                    f"""
+                    SELECT related.label_zh AS keyword,
+                           COUNT(DISTINCT related.doi) AS paper_count
+                    FROM paper_keywords seed
+                    JOIN papers p ON p.doi=seed.doi
+                    JOIN paper_keywords related ON related.doi=seed.doi
+                    WHERE {' AND '.join(clauses)}
+                      AND related.label_zh NOT LIKE ?
+                    GROUP BY related.label_zh
+                    ORDER BY paper_count DESC,related.label_zh
+                    LIMIT ?
+                    """,
+                    params,
+                )
+            )
+
     def keyword_growth(
         self,
         limit: int = 20,
@@ -842,6 +881,54 @@ class SQLiteRepo:
             "source": "sqlite",
         }
 
+    def institutions_by_topics(
+        self,
+        topics: List[str],
+        limit: int = 15,
+        start_year: Optional[int] = None,
+        end_year: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        terms = [str(v).strip() for v in topics or [] if str(v).strip()]
+        if not terms:
+            return {"scope": "keyword_institutions", "topics": [], "institutions": [], "source": "sqlite"}
+        topic_sql = " OR ".join("pk.label_zh LIKE ?" for _ in terms)
+        clauses = [f"({topic_sql})", "i.name_norm IS NOT NULL", "i.name_norm <> ''"]
+        params: List[Any] = [f"%{term}%" for term in terms]
+        if start_year is not None:
+            clauses.append("p.year >= ?")
+            params.append(start_year)
+        if end_year is not None:
+            clauses.append("p.year <= ?")
+            params.append(end_year)
+        with self._conn() as conn:
+            rows = self._rows(
+                conn.execute(
+                    f"""
+                    SELECT i.name_norm AS institution,ai.doi
+                    FROM paper_keywords pk
+                    JOIN papers p ON p.doi=pk.doi
+                    JOIN author_institutions ai ON ai.doi=pk.doi
+                    JOIN institutions i ON i.institution_id=ai.institution_id
+                    WHERE {' AND '.join(clauses)}
+                    """,
+                    params,
+                )
+            )
+        by_institution: Dict[str, set] = {}
+        for row in rows:
+            name = _normalize_institution_name(str(row.get("institution") or ""))
+            if name and row.get("doi"):
+                by_institution.setdefault(name, set()).add(row["doi"])
+        ranked = sorted(by_institution.items(), key=lambda item: (-len(item[1]), item[0]))[:limit]
+        return {
+            "scope": "keyword_institutions",
+            "topics": terms,
+            "institutions": [{"institution": name, "paper_count": len(dois)} for name, dois in ranked],
+            "start_year": start_year,
+            "end_year": end_year,
+            "source": "sqlite",
+        }
+
     def papers_by_keyword(
         self,
         keyword: str,
@@ -863,15 +950,386 @@ class SQLiteRepo:
             params.append(end_year)
         params.append(limit)
         sql = f"""
-            SELECT DISTINCT p.doi AS doi, p.title_zh AS title_zh, p.year AS year
+            SELECT p.doi AS doi, p.title_zh AS title_zh, p.year AS year,
+                   GROUP_CONCAT(DISTINCT COALESCE(a.name_zh, a.name_en)) AS author_names
             FROM paper_keywords pk
             JOIN papers p ON p.doi = pk.doi
+            LEFT JOIN paper_authors pa ON pa.doi = p.doi
+            LEFT JOIN authors a ON a.author_id = pa.author_id
             WHERE {' AND '.join(clauses)}
+            GROUP BY p.doi, p.title_zh, p.year
             ORDER BY p.year DESC, p.doi
             LIMIT ?
         """
         with self._conn() as conn:
-            return self._rows(conn.execute(sql, params))
+            rows = self._rows(conn.execute(sql, params))
+        for row in rows:
+            row["authors"] = [
+                name.strip()
+                for name in str(row.pop("author_names", "") or "").split(",")
+                if name.strip()
+            ]
+        return rows
+
+    def papers_by_topics(
+        self,
+        topics: List[str],
+        limit_per_topic: int = 20,
+        start_year: Optional[int] = None,
+        end_year: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Traceable papers grouped by requested topic, deduplicated by DOI."""
+        groups: List[Dict[str, Any]] = []
+        flattened: List[Dict[str, Any]] = []
+        seen = set()
+        for topic in [str(v).strip() for v in topics or [] if str(v).strip()]:
+            papers = self.papers_by_keyword(topic, limit_per_topic, start_year, end_year)
+            groups.append({"topic": topic, "paper_count": len(papers), "papers": papers})
+            for paper in papers:
+                doi = paper.get("doi")
+                if not doi or doi in seen:
+                    continue
+                seen.add(doi)
+                flattened.append({**paper, "topic": topic})
+        flattened.sort(key=lambda row: (-(int(row.get("year") or 0)), str(row.get("doi") or "")))
+        return {
+            "scope": "topic_papers",
+            "topics": groups,
+            "papers": flattened,
+            "total_count": len(flattened),
+            "start_year": start_year,
+            "end_year": end_year,
+            "source": "sqlite",
+        }
+
+    def representative_authors_by_topics(
+        self,
+        topics: List[str],
+        limit: int = 10,
+        start_year: Optional[int] = None,
+        end_year: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Authors ranked by distinct topic-matched DOI across all topics."""
+        by_author: Dict[str, Dict[str, Any]] = {}
+        for topic in [str(v).strip() for v in topics or [] if str(v).strip()]:
+            result = self.authors_by_keyword(
+                topic,
+                author_limit=max(limit * 4, 30),
+                papers_per_author=1000,
+                start_year=start_year,
+                end_year=end_year,
+            )
+            for author in result.get("authors") or []:
+                aid = str(author.get("author_id") or "")
+                if not aid:
+                    continue
+                row = by_author.setdefault(
+                    aid,
+                    {
+                        "author_id": aid,
+                        "name_zh": author.get("name_zh"),
+                        "name_en": author.get("name_en"),
+                        "topics": [],
+                        "papers": {},
+                    },
+                )
+                if topic not in row["topics"]:
+                    row["topics"].append(topic)
+                for paper in author.get("papers") or []:
+                    if paper.get("doi"):
+                        row["papers"][paper["doi"]] = paper
+        rows: List[Dict[str, Any]] = []
+        for row in by_author.values():
+            papers = sorted(
+                row.pop("papers").values(),
+                key=lambda p: (-(int(p.get("year") or 0)), str(p.get("doi") or "")),
+            )
+            rows.append({**row, "paper_count": len(papers), "papers": papers[:5]})
+        rows.sort(key=lambda row: (-int(row["paper_count"]), str(row.get("name_zh") or "")))
+        return {
+            "scope": "representative_authors_by_topic",
+            "topics": [str(v).strip() for v in topics or [] if str(v).strip()],
+            "authors": rows[:limit],
+            "start_year": start_year,
+            "end_year": end_year,
+            "source": "sqlite",
+        }
+
+    def author_collaborators_for_ids(
+        self,
+        author_ids: List[str],
+        limit_per_author: int = 10,
+        start_year: Optional[int] = None,
+        end_year: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        ids = [str(v).strip() for v in author_ids or [] if str(v).strip()]
+        groups: List[Dict[str, Any]] = []
+        flat: List[Dict[str, Any]] = []
+        with self._conn() as conn:
+            for aid in ids:
+                owner = conn.execute(
+                    "SELECT author_id,name_zh,name_en FROM authors WHERE author_id=?", (aid,)
+                ).fetchone()
+                if not owner:
+                    continue
+                clauses = ["pa1.author_id = ?"]
+                params: List[Any] = [aid]
+                if start_year is not None:
+                    clauses.append("p.year >= ?")
+                    params.append(start_year)
+                if end_year is not None:
+                    clauses.append("p.year <= ?")
+                    params.append(end_year)
+                params.append(limit_per_author)
+                collaborators = self._rows(
+                    conn.execute(
+                        f"""
+                        SELECT a.author_id,a.name_zh,a.name_en,
+                               COUNT(DISTINCT pa2.doi) AS co_papers
+                        FROM paper_authors pa1
+                        JOIN paper_authors pa2 ON pa2.doi=pa1.doi AND pa2.author_id<>pa1.author_id
+                        JOIN authors a ON a.author_id=pa2.author_id
+                        JOIN papers p ON p.doi=pa1.doi
+                        WHERE {' AND '.join(clauses)}
+                        GROUP BY a.author_id,a.name_zh,a.name_en
+                        ORDER BY co_papers DESC,a.name_zh
+                        LIMIT ?
+                        """,
+                        params,
+                    )
+                )
+                for collaborator in collaborators:
+                    paper_clauses = ["pa1.author_id = ?", "pa2.author_id = ?"]
+                    paper_params: List[Any] = [aid, collaborator.get("author_id")]
+                    if start_year is not None:
+                        paper_clauses.append("p.year >= ?")
+                        paper_params.append(start_year)
+                    if end_year is not None:
+                        paper_clauses.append("p.year <= ?")
+                        paper_params.append(end_year)
+                    collaborator["papers"] = self._rows(
+                        conn.execute(
+                            f"""
+                            SELECT DISTINCT p.doi,p.title_zh,p.year
+                            FROM paper_authors pa1
+                            JOIN paper_authors pa2 ON pa2.doi=pa1.doi
+                            JOIN papers p ON p.doi=pa1.doi
+                            WHERE {' AND '.join(paper_clauses)}
+                            ORDER BY p.year DESC,p.doi
+                            """,
+                            paper_params,
+                        )
+                    )
+                owner_dict = dict(owner)
+                groups.append({"author": owner_dict, "collaborators": collaborators})
+                for collaborator in collaborators:
+                    flat.append({**collaborator, "source_author_id": aid})
+        return {
+            "scope": "author_collaborators",
+            "authors": groups,
+            "collaborators": flat,
+            "query_completed": True,
+            "start_year": start_year,
+            "end_year": end_year,
+            "source": "sqlite",
+        }
+
+    def author_network(
+        self,
+        topic: Optional[str] = None,
+        limit: int = 30,
+        start_year: Optional[int] = None,
+        end_year: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        clauses = ["pa1.author_id < pa2.author_id"]
+        params: List[Any] = []
+        join_topic = ""
+        if topic:
+            join_topic = "JOIN paper_keywords pk ON pk.doi=p.doi"
+            clauses.append("pk.label_zh LIKE ?")
+            params.append(f"%{topic}%")
+        if start_year is not None:
+            clauses.append("p.year >= ?")
+            params.append(start_year)
+        if end_year is not None:
+            clauses.append("p.year <= ?")
+            params.append(end_year)
+        with self._conn() as conn:
+            rows = self._rows(
+                conn.execute(
+                    f"""
+                    SELECT pa1.author_id AS source_id,a1.name_zh AS source_name,
+                           pa2.author_id AS target_id,a2.name_zh AS target_name,
+                           p.doi,p.title_zh,p.year
+                    FROM paper_authors pa1
+                    JOIN paper_authors pa2 ON pa2.doi=pa1.doi
+                    JOIN authors a1 ON a1.author_id=pa1.author_id
+                    JOIN authors a2 ON a2.author_id=pa2.author_id
+                    JOIN papers p ON p.doi=pa1.doi
+                    {join_topic}
+                    WHERE {' AND '.join(clauses)}
+                    """,
+                    params,
+                )
+            )
+        by_edge: Dict[tuple, Dict[str, Any]] = {}
+        for row in rows:
+            key = (row["source_id"], row["target_id"])
+            edge = by_edge.setdefault(
+                key,
+                {
+                    "source_id": row["source_id"],
+                    "source_name": row.get("source_name"),
+                    "target_id": row["target_id"],
+                    "target_name": row.get("target_name"),
+                    "papers": {},
+                },
+            )
+            edge["papers"][row["doi"]] = {
+                "doi": row["doi"], "title_zh": row.get("title_zh"), "year": row.get("year")
+            }
+        edges = []
+        for edge in by_edge.values():
+            papers = sorted(edge.pop("papers").values(), key=lambda p: (-(int(p.get("year") or 0)), p["doi"]))
+            edges.append({**edge, "paper_count": len(papers), "papers": papers})
+        edges.sort(key=lambda edge: (-int(edge["paper_count"]), str(edge.get("source_name") or ""), str(edge.get("target_name") or "")))
+        edges = edges[:limit]
+        nodes: Dict[str, Dict[str, Any]] = {}
+        for edge in edges:
+            nodes[edge["source_id"]] = {"id": edge["source_id"], "name": edge.get("source_name")}
+            nodes[edge["target_id"]] = {"id": edge["target_id"], "name": edge.get("target_name")}
+        return {
+            "scope": "author_network",
+            "topic": topic,
+            "nodes": list(nodes.values()),
+            "edges": edges,
+            "query_completed": True,
+            "start_year": start_year,
+            "end_year": end_year,
+            "source": "sqlite",
+        }
+
+    def institution_network(
+        self,
+        topic: Optional[str] = None,
+        limit: int = 30,
+        start_year: Optional[int] = None,
+        end_year: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        clauses = ["ai1.institution_id < ai2.institution_id"]
+        params: List[Any] = []
+        join_topic = ""
+        if topic:
+            join_topic = "JOIN paper_keywords pk ON pk.doi=p.doi"
+            clauses.append("pk.label_zh LIKE ?")
+            params.append(f"%{topic}%")
+        if start_year is not None:
+            clauses.append("p.year >= ?")
+            params.append(start_year)
+        if end_year is not None:
+            clauses.append("p.year <= ?")
+            params.append(end_year)
+        with self._conn() as conn:
+            rows = self._rows(
+                conn.execute(
+                    f"""
+                    SELECT ai1.institution_id AS source_id,i1.name_norm AS source_name,
+                           ai2.institution_id AS target_id,i2.name_norm AS target_name,
+                           p.doi,p.title_zh,p.year
+                    FROM author_institutions ai1
+                    JOIN author_institutions ai2 ON ai2.doi=ai1.doi
+                    JOIN institutions i1 ON i1.institution_id=ai1.institution_id
+                    JOIN institutions i2 ON i2.institution_id=ai2.institution_id
+                    JOIN papers p ON p.doi=ai1.doi
+                    {join_topic}
+                    WHERE {' AND '.join(clauses)}
+                    """,
+                    params,
+                )
+            )
+        by_edge: Dict[tuple, Dict[str, Any]] = {}
+        for row in rows:
+            source_name = _normalize_institution_name(str(row.get("source_name") or ""))
+            target_name = _normalize_institution_name(str(row.get("target_name") or ""))
+            if not source_name or not target_name or source_name == target_name:
+                continue
+            if source_name > target_name:
+                source_name, target_name = target_name, source_name
+            source_id = f"normalized:{source_name}"
+            target_id = f"normalized:{target_name}"
+            key = (source_id, target_id)
+            edge = by_edge.setdefault(
+                key,
+                {
+                    "source_id": source_id,
+                    "source_name": source_name,
+                    "target_id": target_id,
+                    "target_name": target_name,
+                    "papers": {},
+                },
+            )
+            edge["papers"][row["doi"]] = {
+                "doi": row["doi"], "title_zh": row.get("title_zh"), "year": row.get("year")
+            }
+        edges = []
+        for edge in by_edge.values():
+            papers = sorted(edge.pop("papers").values(), key=lambda p: (-(int(p.get("year") or 0)), p["doi"]))
+            edges.append({**edge, "paper_count": len(papers), "papers": papers})
+        edges.sort(key=lambda edge: (-int(edge["paper_count"]), str(edge.get("source_name") or ""), str(edge.get("target_name") or "")))
+        return {
+            "scope": "institution_network",
+            "topic": topic,
+            "edges": edges[:limit],
+            "query_completed": True,
+            "start_year": start_year,
+            "end_year": end_year,
+            "source": "sqlite",
+        }
+
+    def representative_papers_by_institutions(
+        self,
+        institutions: List[str],
+        papers_per_institution: int = 5,
+        start_year: Optional[int] = None,
+        end_year: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        groups: List[Dict[str, Any]] = []
+        flattened: List[Dict[str, Any]] = []
+        seen = set()
+        for institution in [str(v).strip() for v in institutions or [] if str(v).strip()]:
+            result = self.institution_authors_with_papers(
+                institution,
+                top_authors=5,
+                papers_per_author=papers_per_institution,
+                start_year=start_year,
+                end_year=end_year,
+            )
+            papers: List[Dict[str, Any]] = []
+            local_seen = set()
+            for author in result.get("authors") or []:
+                for paper in author.get("papers") or []:
+                    doi = paper.get("doi")
+                    if not doi or doi in local_seen:
+                        continue
+                    local_seen.add(doi)
+                    item = {**paper, "institution": institution}
+                    papers.append(item)
+                    if doi not in seen:
+                        seen.add(doi)
+                        flattened.append(item)
+                    if len(papers) >= papers_per_institution:
+                        break
+                if len(papers) >= papers_per_institution:
+                    break
+            groups.append({"institution": institution, "papers": papers})
+        return {
+            "scope": "representative_papers_by_institution",
+            "institutions": groups,
+            "papers": flattened,
+            "start_year": start_year,
+            "end_year": end_year,
+            "source": "sqlite",
+        }
 
     def topic_keyword_stats(
         self,
@@ -936,9 +1394,13 @@ class SQLiteRepo:
         limit: int = 20,
     ) -> Dict[str, Any]:
         """Compare normalized topic/keyword shares between two periods."""
-        growth = self.keyword_growth(max(limit * 3, 40), start_year, end_year)
-        periods = growth.get("periods") or []
         requested = [str(t).strip() for t in topics or [] if str(t).strip()]
+        growth = self.keyword_growth(
+            max(limit * 3, 40) if requested else 100000,
+            start_year,
+            end_year,
+        )
+        periods = growth.get("periods") or []
         rows = list(growth.get("keyword_growth") or [])
         if requested:
             selected: List[Dict[str, Any]] = []
@@ -966,17 +1428,24 @@ class SQLiteRepo:
                         "share_delta_pp": round((ls - es) * 100, 3),
                     })
             rows = selected
-        enhanced = [r for r in rows if float(r.get("share_delta_pp") or 0) > 0]
-        weakened = [r for r in rows if float(r.get("share_delta_pp") or 0) < 0]
+        enhanced = sorted(
+            [r for r in rows if float(r.get("share_delta_pp") or 0) > 0],
+            key=lambda r: -float(r.get("share_delta_pp") or 0),
+        )
+        weakened = sorted(
+            [r for r in rows if float(r.get("share_delta_pp") or 0) < 0],
+            key=lambda r: float(r.get("share_delta_pp") or 0),
+        )
+        displayed = rows[:limit] if requested else enhanced[:limit] + weakened[:limit]
         return {
             "scope": "topic_period_compare",
             "start_year": growth.get("start_year"),
             "end_year": growth.get("end_year"),
             "partial_year": growth.get("partial_year"),
             "periods": periods,
-            "topics": rows[:limit],
-            "enhanced": sorted(enhanced, key=lambda r: -float(r.get("share_delta_pp") or 0))[:limit],
-            "weakened": sorted(weakened, key=lambda r: float(r.get("share_delta_pp") or 0))[:limit],
+            "topics": displayed,
+            "enhanced": enhanced[:limit],
+            "weakened": weakened[:limit],
             "new": [r for r in rows if int(r.get("early_count") or 0) == 0 and int(r.get("late_count") or 0) > 0][:limit],
             "disappeared": [r for r in rows if int(r.get("early_count") or 0) > 0 and int(r.get("late_count") or 0) == 0][:limit],
             "source": "sqlite",
@@ -1132,7 +1601,21 @@ class SQLiteRepo:
                 "yearly": [{"year": y, "paper_count": count} for y, count in zip(years, counts)],
             })
         out.sort(key=lambda r: (-int(r["top10_years"]), -int(r["active_years"]), -int(r["total_papers"]), r["institution"]))
-        return {"scope": "institution_stability", "start_year": y0, "end_year": y1, "years": years, "institutions": out[:limit], "source": "sqlite"}
+        return {
+            "scope": "institution_stability",
+            "start_year": y0,
+            "end_year": y1,
+            "years": years,
+            "thresholds": {
+                "active_year_rate": 0.8,
+                "active_year_rate_pct": 80,
+                "top10_year_rate": 0.5,
+                "top10_year_rate_pct": 50,
+                "minimum_years": 5,
+            },
+            "institutions": out[:limit],
+            "source": "sqlite",
+        }
 
     def author_keywords_sample(
         self,

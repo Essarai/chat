@@ -62,8 +62,9 @@ class MiniMaxChat:
                     headers=headers,
                     method="POST",
                 )
-                # Two understanding attempts, including backoff, stay near 30s total.
-                timeout = 14 if max_tokens <= 1200 else 90
+                # Keep both attempts inside the stage budget: understanding
+                # stays near 30s and generation near 90s including backoff.
+                timeout = 14 if max_tokens <= 1200 else 44
                 with urllib.request.urlopen(req, timeout=timeout) as resp:
                     data = json.loads(resp.read().decode("utf-8"))
 

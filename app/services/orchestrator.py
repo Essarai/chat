@@ -14,6 +14,15 @@ from app.services.neo4j_repo import Neo4jRepo
 from app.services.sqlite_repo import SQLiteRepo
 
 
+def _attach_answer_quality(state: Dict[str, Any], answer: str) -> None:
+    from app.agents.coverage import assess_answer_coverage, assess_quality
+
+    state["answer_coverage"] = assess_answer_coverage(
+        answer, state.get("operation_results") or []
+    )
+    state["quality_report"] = assess_quality(answer, state)  # type: ignore[arg-type]
+
+
 @dataclass
 class AskResult:
     answer: str
@@ -141,6 +150,7 @@ class ChatOrchestrator:
                 "coverage_report": final.get("coverage_report") or {},
                 "result_set": result_set,
                 "answer_coverage": final.get("answer_coverage") or {},
+                "quality_report": final.get("quality_report") or {},
                 "goal": final.get("goal"),
                 "stage": final.get("stage"),
                 "evidence_bundle": final.get("evidence_bundle"),
@@ -177,8 +187,7 @@ class ChatOrchestrator:
         prepared_ms = int((time.monotonic() - started) * 1000)
         generation_started = time.monotonic()
         answer = finalize_answer("".join(stream_generate(prepared)), prepared.get("intents") or [], prepared)
-        from app.agents.coverage import assess_answer_coverage
-        prepared["answer_coverage"] = assess_answer_coverage(answer, prepared.get("operation_results") or [])
+        _attach_answer_quality(prepared, answer)
         prepared["stage_timings_ms"] = {
             "understand_query_retrieve": prepared_ms,
             "generate": int((time.monotonic() - generation_started) * 1000),
@@ -222,13 +231,13 @@ class ChatOrchestrator:
         try:
             for delta in stream_generate(prepared):
                 chunks.append(delta)
-                yield {"type": "delta", "text": delta}
         except Exception as e:
             if chunks:
                 answer = finalize_answer("".join(chunks), intents, prepared)
-                from app.agents.coverage import assess_answer_coverage
-                prepared["answer_coverage"] = assess_answer_coverage(answer, prepared.get("operation_results") or [])
+                _attach_answer_quality(prepared, answer)
                 result = self._pack_result(question, prepared, answer)
+                for index in range(0, len(result.answer), 48):
+                    yield {"type": "delta", "text": result.answer[index : index + 48]}
                 yield {
                     "type": "done",
                     "answer": result.answer,
@@ -246,8 +255,7 @@ class ChatOrchestrator:
             return
 
         answer = finalize_answer("".join(chunks), intents, prepared)
-        from app.agents.coverage import assess_answer_coverage
-        prepared["answer_coverage"] = assess_answer_coverage(answer, prepared.get("operation_results") or [])
+        _attach_answer_quality(prepared, answer)
         prepared["stage_timings_ms"] = {
             "understand_query_retrieve": prepared_ms,
             "generate": int((time.monotonic() - started) * 1000) - prepared_ms,
@@ -255,6 +263,8 @@ class ChatOrchestrator:
         }
         result = self._pack_result(question, prepared, answer)
         result.evidence["stage_timings_ms"] = prepared["stage_timings_ms"]
+        for index in range(0, len(result.answer), 48):
+            yield {"type": "delta", "text": result.answer[index : index + 48]}
         yield {
             "type": "done",
             "answer": result.answer,

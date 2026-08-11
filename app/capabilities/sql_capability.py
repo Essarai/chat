@@ -139,6 +139,75 @@ def fastest_growth(yoy: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     )
 
 
+def _paginate_papers(
+    data: Dict[str, Any],
+    plan: Dict[str, Any],
+    group_keys: tuple = ("topics", "authors", "institutions", "directions"),
+) -> Dict[str, Any]:
+    """Apply the shared answer capacity to a DOI-deduplicated paper list."""
+    out = dict(data or {})
+    groups_key = next(
+        (key for key in group_keys if isinstance(out.get(key), list)),
+        None,
+    )
+    papers = list(out.get("papers") or [])
+    if not papers and groups_key:
+        seen = set()
+        for group in out.get(groups_key) or []:
+            for paper in (group.get("papers") or []) if isinstance(group, dict) else []:
+                doi = str(paper.get("doi") or "")
+                if doi and doi not in seen:
+                    seen.add(doi)
+                    papers.append(paper)
+
+    offset = max(0, int(plan.get("offset") or 0))
+    max_items = max(1, min(int(plan.get("max_items") or 100), 100))
+    max_chars = max(1000, min(int(plan.get("max_chars") or 24000), 24000))
+    selected: List[Dict[str, Any]] = []
+    estimated = 0
+    for paper in papers[offset:]:
+        cost = (
+            len(str(paper.get("title_zh") or paper.get("title") or ""))
+            + len(str(paper.get("doi") or ""))
+            + sum(len(str(name)) for name in (paper.get("authors") or []))
+            + 120
+        )
+        if selected and (len(selected) >= max_items or estimated + cost > max_chars):
+            break
+        selected.append(paper)
+        estimated += cost
+
+    out["papers"] = selected
+    if groups_key:
+        remaining = {str(paper.get("doi") or "") for paper in selected}
+        paged_groups: List[Dict[str, Any]] = []
+        for group in out.get(groups_key) or []:
+            if not isinstance(group, dict):
+                continue
+            chosen = []
+            for paper in group.get("papers") or []:
+                doi = str(paper.get("doi") or "")
+                if doi and doi in remaining:
+                    chosen.append(paper)
+                    remaining.remove(doi)
+            if chosen or offset == 0:
+                paged_groups.append({**group, "papers": chosen, "shown_count": len(chosen)})
+        out[groups_key] = paged_groups
+
+    shown = len(selected)
+    total = len(papers)
+    out.update(
+        {
+            "offset": offset,
+            "shown_count": shown,
+            "total_count": total,
+            "next_offset": offset + shown,
+            "has_more": offset + shown < total,
+        }
+    )
+    return out
+
+
 def _period_triples(y0: int, y1: int) -> List[tuple]:
     span = max(y1 - y0 + 1, 1)
     step = max(span // 3, 1)
@@ -232,9 +301,10 @@ def _execute_single_plan(
     if y0 is None and y1 is None:
         y0 = entities.get("year_start")
         y1 = entities.get("year_end")
+    keyword_values = plan.get("keywords") if "keywords" in plan else entities.get("keywords")
     kws = [
         str(k).strip()
-        for k in (plan.get("keywords") or entities.get("keywords") or [])
+        for k in (keyword_values or [])
         if str(k).strip()
     ]
     author = plan.get("author_name") or entities.get("author_name")
@@ -276,6 +346,94 @@ def _execute_single_plan(
     if "institution_stability" in ops:
         data = db.institution_stability(int(plan.get("top_n") or 10), y0, y1)
         data["task"] = "institution_stability"
+        return data
+
+    if "topic_papers" in ops or "representative_papers_by_topic" in ops:
+        representative = "representative_papers_by_topic" in ops
+        data = db.papers_by_topics(
+            kws,
+            int(plan.get("papers_per_topic") or (5 if representative else 10000)),
+            y0,
+            y1,
+        )
+        data["related_keywords"] = [
+            {
+                "topic": topic,
+                "keywords": db.related_keywords_for_topic(topic, 8, y0, y1),
+            }
+            for topic in kws
+        ]
+        if not representative:
+            data = _paginate_papers(data, plan, ("topics",))
+        data["task"] = "representative_papers_by_topic" if representative else "topic_papers"
+        data["scope"] = data["task"]
+        return data
+
+    if "representative_authors_by_topic" in ops:
+        data = db.representative_authors_by_topics(
+            kws,
+            int(plan.get("top_n") or 10),
+            y0,
+            y1,
+        )
+        data["task"] = "representative_authors_by_topic"
+        return data
+
+    if "author_papers" in ops:
+        ids = [str(v).strip() for v in (plan.get("author_ids") or []) if str(v).strip()]
+        if not ids and author:
+            resolved = db.resolve_author(str(author))
+            if resolved and resolved.get("author_id"):
+                ids = [str(resolved["author_id"])]
+        grouped = db.papers_for_authors(ids, y0, y1)
+        papers = [
+            {**paper, "author_id": group.get("author_id"), "author_name": group.get("name_zh")}
+            for group in grouped
+            for paper in group.get("papers") or []
+        ]
+        data = {
+            "scope": "author_papers",
+            "task": "author_papers",
+            "authors": grouped,
+            "papers": papers,
+            "total_count": len(papers),
+            "start_year": y0,
+            "end_year": y1,
+            "source": "sqlite",
+        }
+        return _paginate_papers(data, plan, ("authors",))
+
+    if "author_collaborators" in ops:
+        ids = [str(v).strip() for v in (plan.get("author_ids") or []) if str(v).strip()]
+        if not ids and author:
+            resolved = db.resolve_author(str(author))
+            if resolved and resolved.get("author_id"):
+                ids = [str(resolved["author_id"])]
+        data = db.author_collaborators_for_ids(ids, int(plan.get("top_n") or 10), y0, y1)
+        data["task"] = "author_collaborators"
+        return data
+
+    if "author_network" in ops:
+        data = db.author_network(kws[0] if kws else None, int(plan.get("top_n") or 30), y0, y1)
+        data["task"] = "author_network"
+        return data
+
+    if "institution_network" in ops:
+        data = db.institution_network(kws[0] if kws else None, int(plan.get("top_n") or 30), y0, y1)
+        data["task"] = "institution_network"
+        return data
+
+    if "representative_papers_by_institution" in ops:
+        institutions = [
+            str(v).strip() for v in (plan.get("institutions") or []) if str(v).strip()
+        ]
+        data = db.representative_papers_by_institutions(
+            institutions,
+            int(plan.get("papers_per_institution") or 5),
+            y0,
+            y1,
+        )
+        data["task"] = "representative_papers_by_institution"
         return data
 
     if "present_resultset" in ops or task == "resultset_papers":
@@ -415,6 +573,14 @@ def _execute_single_plan(
             kws = ["基因编辑", "CRISPR", "基因组编辑"]
         stats = db.topic_keyword_stats(kws, y0, y1)
         topic_rows = stats.get("topic_keywords") or []
+        primary_topic = str(plan.get("primary_topic") or (kws[0] if kws else ""))
+        adjacent_topics = [
+            str(value) for value in (plan.get("adjacent_topics") or kws[1:]) if str(value)
+        ]
+        counts_by_topic = {
+            str(row.get("keyword")): int(row.get("paper_count") or 0)
+            for row in topic_rows
+        }
         fit_meta = score_submission_fit_from_keyword_rows(topic_rows)
         fit_label = fit_meta["fit_label"]
         total = int(fit_meta["total_hits"])
@@ -473,6 +639,14 @@ def _execute_single_plan(
         scope = "submission_fit" if is_fit else "topic_coverage"
         out_task = "submission_fit" if is_fit else "topic_coverage"
         sample = papers[:8] if papers else []
+        direct_papers = db.papers_by_keyword(primary_topic, 20, y0, y1) if primary_topic else []
+        direct_dois = {paper.get("doi") for paper in direct_papers if paper.get("doi")}
+        adjacent_papers: List[Dict[str, Any]] = []
+        for topic in adjacent_topics:
+            for paper in db.papers_by_keyword(topic, 20, y0, y1):
+                if paper.get("doi") and paper.get("doi") not in direct_dois:
+                    direct_dois.add(paper["doi"])
+                    adjacent_papers.append({**paper, "matched_adjacent_topic": topic})
         return {
             **stats,
             "scope": scope,
@@ -495,6 +669,12 @@ def _execute_single_plan(
                 ),
             },
             "fit_label": fit_label,
+            "primary_topic": primary_topic,
+            "direct_hits": counts_by_topic.get(primary_topic, 0),
+            "direct_papers": direct_papers,
+            "adjacent_topics": adjacent_topics,
+            "adjacent_hits": sum(counts_by_topic.get(topic, 0) for topic in adjacent_topics),
+            "adjacent_papers": adjacent_papers,
             "start_year": y0,
             "end_year": y1,
             "source": "sqlite",
@@ -569,14 +749,19 @@ def _execute_single_plan(
         )
         # ranking questions usually want a short list without long paper dumps
         papers_per = int(plan.get("papers_per_author") or (2 if task == "keyword_authors" else 8))
-        data = db.authors_by_keyword(
-            kw,
-            author_limit=top_n,
-            papers_per_author=papers_per,
-            start_year=y0,
-            end_year=y1,
+        data = (
+            db.representative_authors_by_topics(kws, top_n, y0, y1)
+            if len(kws) > 1
+            else db.authors_by_keyword(
+                kw,
+                author_limit=top_n,
+                papers_per_author=papers_per,
+                start_year=y0,
+                end_year=y1,
+            )
         )
         evidence.update(data)
+        evidence["keyword"] = kw if len(kws) == 1 else "、".join(kws)
         evidence["task"] = "keyword_authors"
         evidence["scope"] = "keyword_authors"
         evidence["top_n"] = top_n
@@ -585,7 +770,11 @@ def _execute_single_plan(
 
     if "institutions_by_keyword" in ops:
         kw = (kws[0] if kws else None) or _pick_keyword(question, entities) or ""
-        inst = db.institutions_by_keyword(kw, 15, y0, y1)
+        inst = (
+            db.institutions_by_topics(kws, 15, y0, y1)
+            if len(kws) > 1
+            else db.institutions_by_keyword(kw, 15, y0, y1)
+        )
         evidence["institutions"] = inst.get("institutions") or []
         evidence["keyword"] = kw or evidence.get("keyword")
         evidence["scope"] = (
@@ -616,7 +805,23 @@ def _execute_single_plan(
 
     if "papers_by_top_keywords" in ops:
         top_n = int(plan.get("top_n_directions") or 3)
-        top_kws = evidence.get("keywords") or db.top_keywords(top_n, y0, y1)
+        if plan.get("use_selected_topics") and kws:
+            top_kws = db.topic_keyword_stats(kws[:top_n], y0, y1).get("topic_keywords") or []
+        else:
+            top_kws = evidence.get("keywords") or []
+            if not top_kws and kws:
+                related: Dict[str, Dict[str, Any]] = {}
+                for parent in kws:
+                    for row in db.related_keywords_for_topic(parent, top_n, y0, y1):
+                        keyword = str(row.get("keyword") or "")
+                        if keyword and int(row.get("paper_count") or 0) > int((related.get(keyword) or {}).get("paper_count") or 0):
+                            related[keyword] = row
+                top_kws = sorted(related.values(), key=lambda row: (-int(row.get("paper_count") or 0), str(row.get("keyword") or "")))[:top_n]
+            if not top_kws and not kws:
+                top_kws = db.top_keywords(top_n, y0, y1)
+        if kws and not top_kws:
+            stats = db.topic_keyword_stats(kws[:1], y0, y1)
+            top_kws = stats.get("topic_keywords") or []
         directions = []
         for r in top_kws[:top_n]:
             kw = r.get("keyword")
@@ -710,7 +915,6 @@ def execute_plan(
     sql_specs = [
         op for op in canonical.get("operations") or []
         if isinstance(op, dict) and op.get("source") == "sql"
-        and op.get("type") != "submission_guidance"
     ]
     if not sql_specs:
         return _execute_single_plan(canonical, question, entities, db)
@@ -724,6 +928,15 @@ def execute_plan(
         "source": "sqlite",
     }
     author_ids = list(canonical.get("author_ids") or [])
+    selected_topics = list(canonical.get("keywords") or [])
+    selected_institutions = list(canonical.get("institutions") or [])
+    primary_topic = str(canonical.get("primary_topic") or "").strip()
+    primary_topic_hits: Optional[int] = None
+    if primary_topic:
+        primary_rows = db.topic_keyword_stats(
+            [primary_topic], canonical.get("year_start"), canonical.get("year_end")
+        ).get("topic_keywords") or []
+        primary_topic_hits = int(primary_rows[0].get("paper_count") or 0) if primary_rows else 0
     for spec in sql_specs:
         op_type = str(spec.get("type") or "")
         run_type = "author_profile" if op_type == "author_topic_summary" else op_type
@@ -734,19 +947,161 @@ def execute_plan(
         params = dict(spec.get("params") or {})
         for key, value in params.items():
             subplan[key] = value
-        if op_type == "papers_for_authors" and not author_ids:
-            for prior in operation_data.values():
-                for row in prior.get("authors") or []:
-                    aid = row.get("author_id")
-                    if aid and aid not in author_ids:
-                        author_ids.append(aid)
+        if op_type in {"papers_for_authors", "author_papers", "author_direction_evolution", "author_collaborators"}:
+            if not author_ids:
+                for prior in operation_data.values():
+                    for row in prior.get("authors") or []:
+                        aid = row.get("author_id")
+                        if aid and aid not in author_ids:
+                            author_ids.append(aid)
             subplan["author_ids"] = author_ids
+        if op_type == "papers_for_authors" and len(sql_specs) > 1:
+            already_reserved = sum(
+                len(prior.get(key) or [])
+                for prior in operation_data.values()
+                for key in ("authors", "institutions", "keywords")
+                if isinstance(prior.get(key), list)
+            )
+            future_types = {str(item.get("type") or "") for item in sql_specs}
+            collaborator_reserved = (
+                min(len(author_ids) * 3, 30) if "author_collaborators" in future_types else 0
+            )
+            available = max(1, 100 - already_reserved - collaborator_reserved)
+            subplan["max_items"] = min(int(subplan.get("max_items") or 100), available)
+        if op_type in {"topic_papers", "representative_papers_by_topic", "representative_authors_by_topic", "topic_yearly", "papers_by_top_keywords"}:
+            if not selected_topics:
+                for prior in operation_data.values():
+                    candidates = prior.get("keywords") or prior.get("keyword_growth") or prior.get("topics") or []
+                    for row in candidates:
+                        topic = row.get("keyword") if isinstance(row, dict) else None
+                        if topic and topic not in selected_topics:
+                            selected_topics.append(topic)
+                selected_topics = selected_topics[: int(canonical.get("top_n_directions") or 5)]
+            subplan["keywords"] = selected_topics
+            if op_type == "papers_by_top_keywords":
+                subplan["use_selected_topics"] = not bool(re.search(r"策划.{0,12}专题", question or ""))
+        if op_type == "representative_papers_by_institution" and not selected_institutions:
+            for prior in operation_data.values():
+                for row in prior.get("institutions") or []:
+                    institution = row.get("institution") if isinstance(row, dict) else None
+                    if institution and institution not in selected_institutions:
+                        selected_institutions.append(institution)
+            subplan["institutions"] = selected_institutions[: int(canonical.get("top_n") or 10)]
         try:
-            data = _execute_single_plan(subplan, question, entities, db)
+            if op_type == "author_direction_evolution" and author_ids and not canonical.get("author_name"):
+                evolutions = [
+                    db.author_direction_evolution(author_id=aid, start_year=subplan.get("year_start"), end_year=subplan.get("year_end"))
+                    for aid in author_ids
+                ]
+                data = {
+                    "scope": "author_direction_evolution",
+                    "task": op_type,
+                    "authors": evolutions,
+                    "start_year": subplan.get("year_start"),
+                    "end_year": subplan.get("year_end"),
+                    "source": "sqlite",
+                }
+            elif op_type == "author_network":
+                allowed_ids = {
+                    str(row.get("author_id"))
+                    for prior in operation_data.values()
+                    for row in (prior.get("authors") or [])
+                    if isinstance(row, dict) and row.get("author_id")
+                }
+                data = db.author_network(
+                    selected_topics[0] if selected_topics else None,
+                    1000,
+                    subplan.get("year_start"),
+                    subplan.get("year_end"),
+                )
+                if allowed_ids:
+                    data["edges"] = [
+                        edge for edge in data.get("edges") or []
+                        if str(edge.get("source_id")) in allowed_ids
+                        and str(edge.get("target_id")) in allowed_ids
+                    ][: int(canonical.get("top_n") or 30)]
+                    data["nodes"] = [
+                        node for node in data.get("nodes") or []
+                        if str(node.get("id")) in allowed_ids
+                    ]
+                data["task"] = op_type
+                data["result_set_author_ids"] = sorted(allowed_ids)
+            elif op_type == "institution_network":
+                allowed_names = {
+                    str(row.get("institution"))
+                    for prior in operation_data.values()
+                    for row in (prior.get("institutions") or [])
+                    if isinstance(row, dict) and row.get("institution")
+                }
+                data = db.institution_network(
+                    selected_topics[0] if selected_topics else None,
+                    1000,
+                    subplan.get("year_start"),
+                    subplan.get("year_end"),
+                )
+                if allowed_names:
+                    data["edges"] = [
+                        edge for edge in data.get("edges") or []
+                        if str(edge.get("source_name")) in allowed_names
+                        and str(edge.get("target_name")) in allowed_names
+                    ][: int(canonical.get("top_n") or 30)]
+                data["task"] = op_type
+                data["result_set_institutions"] = sorted(allowed_names)
+            elif op_type == "submission_guidance":
+                fit = next(
+                    (value for value in operation_data.values() if value.get("scope") == "submission_fit"),
+                    {},
+                )
+                data = {
+                    "scope": "submission_guidance",
+                    "task": op_type,
+                    "fit_label": fit.get("fit_label"),
+                    "total_hits": fit.get("total_hits"),
+                    "keywords_queried": fit.get("keywords_queried") or selected_topics,
+                    "papers": fit.get("papers") or [],
+                    "is_inference": True,
+                    "source": "derived",
+                }
+            elif op_type == "coauthored_papers" and not canonical.get("author_name_b") and selected_topics:
+                network = next(
+                    (value for value in operation_data.values() if value.get("scope") == "author_network"),
+                    None,
+                ) or db.author_network(selected_topics[0], int(canonical.get("top_n") or 30), subplan.get("year_start"), subplan.get("year_end"))
+                papers: Dict[str, Dict[str, Any]] = {}
+                for edge in network.get("edges") or []:
+                    for paper in edge.get("papers") or []:
+                        if paper.get("doi"):
+                            papers[paper["doi"]] = paper
+                data = {
+                    "scope": "coauthored_papers",
+                    "task": op_type,
+                    "topic": selected_topics[0],
+                    "papers": list(papers.values()),
+                    "total_papers": len(papers),
+                    "source": "sqlite",
+                }
+            else:
+                data = _execute_single_plan(subplan, question, entities, db)
         except Exception as exc:  # operation-level error, assessed downstream
             data = {"error": str(exc), "task": op_type, "scope": op_type, "source": "sqlite"}
         data = dict(data or {})
+        if op_type == "topic_period_compare":
+            data["include_gap_candidates"] = bool(re.search(r"内容缺口|覆盖空白|研究空白", question or ""))
+            data["comparison_goal"] = (
+                "field_evolution"
+                if re.search(r"领域|接受文章|研究方向", question or "")
+                else "period_compare"
+            )
+        if primary_topic and op_type in {
+            "papers_by_top_keywords", "authors_by_keyword", "institutions_by_keyword",
+            "topic_papers", "topic_yearly",
+        }:
+            data["primary_topic"] = primary_topic
+            data["direct_hits"] = primary_topic_hits
+            data["match_scope"] = "direct" if primary_topic_hits else "adjacent"
         data["operation"] = op_type
+        if data.get("has_more"):
+            data["continuation_operation_id"] = str(spec.get("id") or op_type)
         operation_data[str(spec.get("id") or op_type)] = data
         for key, value in data.items():
             if key not in aggregate or aggregate.get(key) in (None, [], {}):

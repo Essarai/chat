@@ -1,0 +1,210 @@
+[
+  {
+    "id": "E1",
+    "role": "editor",
+    "journal_id": "ZDXBNXB",
+    "title": "期刊发文结构与领域变化",
+    "example_question": "近十年期刊接受文章的领域有什么变化？哪些方向正在增长或减弱？",
+    "expected_intent": {"kind": "new_question", "action": "query"},
+    "required_operations": ["yearly_counts", "top_keywords", "keyword_growth", "topic_period_compare", "representative_papers_by_topic"],
+    "forbidden_literal_topics": ["领域", "热点", "研究方向"],
+    "constraints": {"relative_years": 10},
+    "required_answer_sections": ["统计范围", "结论摘要", "领域变化", "增强与减弱方向", "代表论文", "数据限制"],
+    "answer_section_checks": [
+      {"name": "统计范围", "any": ["2017–2026", "统计区间"]},
+      {"name": "结论摘要", "any": ["核心差异摘要"]},
+      {"name": "领域变化", "any": ["领域变化与阶段对照"]},
+      {"name": "增强与减弱方向", "all": ["增强", "减弱"]},
+      {"name": "代表论文", "any": ["代表论文"]},
+      {"name": "数据限制", "any": ["未完年", "可比性限制"]}
+    ],
+    "hard_gates": ["correct_time_range", "incomplete_current_year_labeled", "at_least_two_non_empty_periods", "representative_papers_traceable", "all_operations_have_status", "no_invented_fact"]
+  },
+  {
+    "id": "E2",
+    "role": "editor",
+    "journal_id": "ZDXBNXB",
+    "minimum_operation_coverage": 0.8,
+    "title": "专题策划与内容抓手",
+    "example_question": "如果策划智慧农业专题，适合设置哪些子方向？有哪些作者和论文可以参考？",
+    "expected_intent": {"kind": "new_question", "action": "query"},
+    "required_operations": ["submission_fit", "topic_yearly", "papers_by_top_keywords", "authors_by_keyword", "institutions_by_keyword"],
+    "constraints": {"topic": "智慧农业"},
+    "required_answer_sections": ["匹配结论", "历史发文基础", "候选子方向", "代表作者与机构", "代表论文", "风险与建议"],
+    "answer_section_checks": [
+      {"name": "匹配结论", "any": ["覆盖结论"]},
+      {"name": "历史发文基础", "any": ["关键词命中", "主题年度变化"]},
+      {"name": "候选子方向", "any": ["相邻主题线索", "候选子方向"]},
+      {"name": "代表作者与机构", "all": ["作者", "机构"]},
+      {"name": "代表论文", "any": ["DOI:"]},
+      {"name": "风险与建议", "all": ["投稿注意", "投稿建议"]}
+    ],
+    "hard_gates": ["fit_supported_by_data", "authors_linked_to_topic_papers", "papers_have_title_year_doi", "facts_and_suggestions_separated", "all_operations_have_status", "no_invented_fact"]
+  },
+  {
+    "id": "E3",
+    "role": "editor",
+    "journal_id": "ZDXBNXB",
+    "title": "核心作者团队与方向演化",
+    "example_question": "近十年核心作者和研究团队有哪些？他们的研究方向发生了什么变化？",
+    "expected_intent": {"kind": "new_question", "action": "query"},
+    "required_operations": ["top_authors", "papers_for_authors", "author_direction_evolution", "author_collaborators"],
+    "constraints": {"relative_years": 10},
+    "result_set_requirements": ["stable_author_ids", "ordered_authors", "paper_dois_by_author"],
+    "required_answer_sections": ["统计口径", "核心作者排名", "方向演化", "合作关系", "代表论文", "消歧与限制"],
+    "answer_section_checks": [
+      {"name": "统计口径", "any": ["统计区间"]},
+      {"name": "核心作者排名", "any": ["发文量 Top10 作者"]},
+      {"name": "方向演化", "any": ["作者研究方向演化"]},
+      {"name": "合作关系", "any": ["主要合作者"]},
+      {"name": "代表论文", "any": ["作者具体论文"]},
+      {"name": "消歧与限制", "any": ["author_id", "同名"]}
+    ],
+    "hard_gates": ["counts_are_distinct_dois", "teams_proven_by_coauthorship", "evolution_has_two_non_empty_periods_or_partial", "papers_belong_to_author_id", "no_same_name_merge", "no_invented_fact"]
+  },
+  {
+    "id": "E4",
+    "role": "editor",
+    "journal_id": "ZDXBNXB",
+    "title": "机构长期贡献与合作结构",
+    "example_question": "哪些机构长期保持高产？主要机构之间有哪些稳定合作？",
+    "expected_intent": {"kind": "new_question", "action": "query"},
+    "required_operations": ["institution_stability", "top_institutions", "institution_network", "representative_papers_by_institution"],
+    "constraints": {"default_complete_years": 10},
+    "result_set_requirements": ["stable_institution_ids", "yearly_counts_by_institution", "coauthored_dois_by_edge"],
+    "required_answer_sections": ["稳定性定义", "稳定机构排名", "机构合作关系", "代表论文", "别名与限制"],
+    "answer_section_checks": [
+      {"name": "稳定性定义", "any": ["判定定义"]},
+      {"name": "稳定机构排名", "any": ["长期高产机构"]},
+      {"name": "机构合作关系", "any": ["机构合作网络"]},
+      {"name": "代表论文", "any": ["代表论文"]},
+      {"name": "别名与限制", "any": ["别名不强制合并", "规范化字段"]}
+    ],
+    "hard_gates": ["at_least_five_complete_years", "stability_threshold_enforced", "edges_have_shared_dois", "aliases_not_forced", "all_operations_have_status", "no_invented_fact"]
+  },
+  {
+    "id": "E5",
+    "role": "editor",
+    "journal_id": "ZDXBNXB",
+    "title": "新兴方向与内容缺口",
+    "example_question": "根据近十年数据，哪些方向可能成为下一阶段热点？期刊目前有哪些内容缺口？",
+    "expected_intent": {"kind": "new_question", "action": "query"},
+    "required_operations": ["keyword_growth", "topic_period_compare", "papers_by_top_keywords", "representative_authors_by_topic"],
+    "forbidden_literal_topics": ["热点", "未来热点", "内容缺口"],
+    "constraints": {"relative_years": 10, "exclude_incomplete_year_from_ranking": true},
+    "required_answer_sections": ["候选方向", "增长信号", "持续性信号", "代表作者与论文", "内容缺口", "预测限制"],
+    "answer_section_checks": [
+      {"name": "候选方向", "any": ["新兴候选", "候选方向"]},
+      {"name": "增长信号", "any": ["占比变化"]},
+      {"name": "持续性信号", "any": ["近期覆盖"]},
+      {"name": "代表作者与论文", "all": ["代表作者", "DOI:"]},
+      {"name": "内容缺口", "any": ["内容缺口候选"]},
+      {"name": "预测限制", "any": ["预测限制"]}
+    ],
+    "hard_gates": ["emerging_threshold_enforced", "ranked_by_share_delta", "inference_language_used", "no_external_trend_claim_without_evidence", "all_operations_have_status", "no_invented_fact"]
+  },
+  {
+    "id": "R1",
+    "role": "reader",
+    "journal_id": "ZDXBRWB",
+    "title": "主题概览与代表文献",
+    "example_question": "近五年该刊关于马克思的研究有哪些？主要关注什么问题？",
+    "expected_intent": {"kind": "new_question", "action": "query"},
+    "required_operations": ["topic_papers", "topic_yearly", "authors_by_keyword"],
+    "constraints": {"relative_years": 5, "topic": "马克思"},
+    "result_set_requirements": ["paper_doi", "title", "authors", "year"],
+    "required_answer_sections": ["检索范围", "主题概览", "年度变化", "代表作者", "论文列表", "检索口径"],
+    "answer_section_checks": [
+      {"name": "检索范围", "any": ["检索区间：2022–2026"]},
+      {"name": "主题概览", "any": ["主题概览"]},
+      {"name": "年度变化", "any": ["主题年度变化"]},
+      {"name": "代表作者", "any": ["代表作者"]},
+      {"name": "论文列表", "all": ["主题论文", "作者：", "DOI:"]},
+      {"name": "检索口径", "any": ["检索口径"]}
+    ],
+    "hard_gates": ["all_papers_match_topic_and_time", "distinct_dois", "summary_grounded_in_matched_papers", "truncation_cursor_when_needed", "no_global_ranking_substitution", "no_invented_fact"]
+  },
+  {
+    "id": "R2",
+    "role": "reader",
+    "journal_id": "ZDXBNXB",
+    "title": "作者论文、方向与合作关系",
+    "example_question": "徐建明发表过哪些论文？研究方向和主要合作者有哪些？",
+    "expected_intent": {"kind": "new_question", "action": "query"},
+    "required_operations": ["author_profile", "author_papers", "author_topic_summary", "author_collaborators"],
+    "constraints": {"author_name": "徐建明"},
+    "result_set_requirements": ["stable_author_id", "paper_dois", "coauthor_ids"],
+    "required_answer_sections": ["作者身份", "发文概况", "研究方向", "主要合作者", "论文列表", "消歧与限制"],
+    "answer_section_checks": [
+      {"name": "作者身份", "any": ["作者身份与发文概况"]},
+      {"name": "发文概况", "any": ["本刊去重发文量"]},
+      {"name": "研究方向", "any": ["研究主题"]},
+      {"name": "主要合作者", "any": ["主要合作者"]},
+      {"name": "论文列表", "all": ["作者论文", "DOI:"]},
+      {"name": "消歧与限制", "all": ["author_id", "同名"]}
+    ],
+    "hard_gates": ["stable_author_id_used", "count_matches_distinct_dois", "coauthors_have_shared_dois", "topics_have_paper_evidence", "clarify_if_homonyms", "no_invented_fact"]
+  },
+  {
+    "id": "R3",
+    "role": "reader",
+    "journal_id": "ZDXBNXB",
+    "title": "主题或时期比较",
+    "example_question": "比较该刊前十年和后十年的热点变化。",
+    "expected_intent": {"kind": "new_question", "action": "compare"},
+    "required_operations": ["topic_period_compare", "topic_yearly", "representative_papers_by_topic"],
+    "constraints": {"split_into_contiguous_periods": true},
+    "required_answer_sections": ["比较范围", "核心差异", "阶段对照", "新增增强减弱方向", "代表论文", "可比性限制"],
+    "answer_section_checks": [
+      {"name": "比较范围", "any": ["比较：2006–2015 vs. 2016–2025"]},
+      {"name": "核心差异", "any": ["核心差异摘要"]},
+      {"name": "阶段对照", "any": ["主题阶段变化"]},
+      {"name": "新增增强减弱方向", "any": ["增强", "减弱"]},
+      {"name": "代表论文", "any": ["代表论文"]},
+      {"name": "可比性限制", "any": ["可比性限制"]}
+    ],
+    "hard_gates": ["both_comparison_sides_preserved", "periods_contiguous_and_non_overlapping", "share_based_comparison", "two_non_empty_periods", "differences_traceable", "no_invented_fact"]
+  },
+  {
+    "id": "R4",
+    "role": "reader",
+    "journal_id": "ZDXBNXB",
+    "title": "主题核心作者机构与合作网络",
+    "example_question": "水稻研究中有哪些核心作者和机构？他们之间如何合作？",
+    "expected_intent": {"kind": "new_question", "action": "query"},
+    "required_operations": ["authors_by_keyword", "institutions_by_keyword", "author_network", "institution_network", "coauthored_papers"],
+    "constraints": {"topic": "水稻"},
+    "result_set_requirements": ["topic_author_ids", "topic_institution_ids", "coauthored_dois_by_edge"],
+    "required_answer_sections": ["主题范围", "核心作者", "核心机构", "合作关系", "合作论文", "网络限制"],
+    "answer_section_checks": [
+      {"name": "主题范围", "any": ["主题「水稻」"]},
+      {"name": "核心作者", "any": ["代表作者"]},
+      {"name": "核心机构", "any": ["相关机构"]},
+      {"name": "合作关系", "all": ["作者合作网络", "机构合作网络"]},
+      {"name": "合作论文", "all": ["代表合作论文", "DOI:"]},
+      {"name": "网络限制", "any": ["网络边界"]}
+    ],
+    "hard_gates": ["rankings_limited_to_topic_result_set", "network_nodes_limited_to_topic_result_set", "edges_have_shared_dois", "same_constraints_across_operations", "core_not_called_influence", "no_invented_fact"]
+  },
+  {
+    "id": "R5",
+    "role": "reader",
+    "journal_id": "ZDXBNXB",
+    "title": "投稿匹配与参考论文",
+    "example_question": "我的研究方向是植物基因编辑，这本期刊适合投稿吗？有哪些相关论文可以参考？",
+    "expected_intent": {"kind": "new_question", "action": "query"},
+    "required_operations": ["submission_fit", "topic_papers", "topic_yearly", "submission_guidance"],
+    "constraints": {"topic": "植物基因编辑"},
+    "result_set_requirements": ["matched_paper_dois", "year_distribution"],
+    "required_answer_sections": ["匹配度", "历史证据", "相邻方向", "代表论文", "投稿建议", "不确定性"],
+    "answer_section_checks": [
+      {"name": "匹配度", "any": ["覆盖结论"]},
+      {"name": "历史证据", "all": ["直接主题", "主题年度变化"]},
+      {"name": "相邻方向", "any": ["相邻检索词"]},
+      {"name": "代表论文", "all": ["主题论文", "DOI:"]},
+      {"name": "投稿建议", "any": ["投稿建议"]},
+      {"name": "不确定性", "all": ["不代表当前编辑政策", "录用承诺"]}
+    ],
+    "hard_gates": ["fit_supported_by_publication_data", "direct_and_adjacent_matches_separated", "no_acceptance_promise", "papers_traceable", "historical_data_limit_disclosed", "no_invented_fact"]
+  }
+]

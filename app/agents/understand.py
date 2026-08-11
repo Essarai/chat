@@ -63,6 +63,10 @@ AUTHOR_PAPERS_LOOSE_RE = re.compile(
     r"([一-龥A-Za-z·]{2,4})(?:老师|教授|研究员)?(?:的)?"
     r"(?:全部)?(?:论文|文章)(?:有哪些|列表|清单)?"
 )
+AUTHOR_PUBLISHED_RE = re.compile(
+    r"([一-龥A-Za-z·]{2,4})(?:老师|教授|研究员)?"
+    r"(?:发表过|发表了|发表|刊发过).{0,8}(?:哪些|什么)?(?:论文|文章|文献)"
+)
 AUTHOR_TEAM_RE = re.compile(
     r"([一-龥A-Za-z·]{2,4})(?:老师|教授|研究员)?(?:的)?研究团队"
 )
@@ -73,6 +77,10 @@ AUTHOR_TRAJECTORY_RE = re.compile(
 AUTHOR_COLLAB_INST_RE = re.compile(
     r"([一-龥A-Za-z·]{2,4})(?:老师|教授|研究员)?(?:的)?合作(?:者|的作者)?.*"
     r"(?:所属)?(?:机构|单位)"
+)
+AUTHOR_COLLABORATOR_RE = re.compile(
+    r"([一-龥A-Za-z·]{2,4})(?:老师|教授|研究员)?(?:的)?(?:主要)?"
+    r"(?:合作伙伴|合作者)"
 )
 # 徐建明和施加春合作的发文 / 徐建明与施加春合著论文
 AUTHOR_PAIR_RE = re.compile(
@@ -129,6 +137,7 @@ _BAD_AUTHOR_NAMES = {
     "大学",
     "农业",
     "相关",
+    "哪些相关",
     "热门",
     "主要",
     "核心",
@@ -177,7 +186,7 @@ def _looks_like_person_name(name: str) -> bool:
     # reject abstract nouns commonly glued before 机构/研究
     if re.search(
         r"(研究|机构|单位|方向|趋势|历程|阶段|学科|期刊|论文|作者|核心|代表|表性|"
-        r"演变|发展|变化|主题|领域|团队|全部|平台|情况|统计|数量)",
+        r"演变|发展|变化|主题|领域|团队|网络|结构|全部|平台|情况|统计|数量|相关)",
         name,
     ):
         return False
@@ -216,9 +225,11 @@ def extract_author_name(question: str) -> Optional[str]:
         AUTHOR_TRAJECTORY_RE,
         AUTHOR_TEAM_RE,
         AUTHOR_PAPERS_RE,
+        AUTHOR_PUBLISHED_RE,
         AUTHOR_PAPERS_LOOSE_RE,
         AUTHOR_PROFILE_RE,
         AUTHOR_HAS_PAPERS_RE,
+        AUTHOR_COLLABORATOR_RE,
         NAME_WITH_PREP_RE,
         AUTHOR_COLLAB_INST_RE,
         NAME_LOOSE_RE,

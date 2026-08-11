@@ -14,6 +14,8 @@ class TurnRecord:
     answer: str
     intent: Dict[str, Any] = field(default_factory=dict)
     query_plan: Dict[str, Any] = field(default_factory=dict)
+    operation_results: List[Dict[str, Any]] = field(default_factory=list)
+    coverage_report: Dict[str, Any] = field(default_factory=dict)
     result_set: Dict[str, Any] = field(default_factory=dict)
     continuation: Dict[str, Any] = field(default_factory=dict)
     citations: List[Dict[str, Any]] = field(default_factory=list)
@@ -26,6 +28,8 @@ class TurnRecord:
             "answer": self.answer,
             "intent": self.intent,
             "query_plan": self.query_plan,
+            "operation_results": self.operation_results,
+            "coverage_report": self.coverage_report,
             "result_set": self.result_set,
             "continuation": self.continuation,
             "citations": self.citations,
@@ -81,13 +85,16 @@ class ConversationStore:
                 state = ConversationState(conversation_id=conversation_id, journal_id=journal_id)
                 self._items[key] = state
             state.updated_at = time.time()
+            self._cleanup()
             return state
 
     def reset(self, conversation_id: str, journal_id: str) -> ConversationState:
         key = (conversation_id, journal_id)
         with self._lock:
+            self._cleanup()
             state = ConversationState(conversation_id=conversation_id, journal_id=journal_id)
             self._items[key] = state
+            self._cleanup()
             return state
 
     def append(self, conversation_id: str, journal_id: str, turn: TurnRecord) -> None:
@@ -120,10 +127,9 @@ class ConversationStore:
                 if client_history[start : start + 2] != pair:
                     break
                 matched += 1
-            if matched * 2 != len(client_history):
-                state.turns = []
-            else:
-                state.turns = state.turns[:matched]
+            # Any mismatch marks the edited branch point. Preserve only the
+            # exact complete-turn prefix before that point.
+            state.turns = state.turns[:matched]
             state.updated_at = time.time()
             return state
 
@@ -183,6 +189,7 @@ def build_turn_record(question: str, result: Any) -> TurnRecord:
     continuation = {
         "has_more": bool(sql.get("has_more")),
         "next_offset": sql.get("next_offset"),
+        "operation_id": sql.get("continuation_operation_id"),
         "shown_count": int(sql.get("shown_count") or len(items)),
         "total_count": int(sql.get("total_count") or len(items)),
     }
@@ -199,6 +206,8 @@ def build_turn_record(question: str, result: Any) -> TurnRecord:
         answer=getattr(result, "answer", "") or "",
         intent=dict(evidence.get("turn_intent") or evidence.get("followup_intent") or {}),
         query_plan=plan,
+        operation_results=list(evidence.get("operation_results") or []),
+        coverage_report=dict(evidence.get("coverage_report") or {}),
         result_set=canonical_result_set or {
             "type": result_type,
             "items": items,

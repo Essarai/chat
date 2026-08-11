@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime
 from typing import Any, Dict, Iterator, List, Optional
 
 from app.agents.evidence_guard import (
@@ -641,12 +642,19 @@ def try_hot_topics_template(state: JournalState) -> Optional[str]:
     directions = sql.get("directions") or []
     if not directions:
         return None
+    adjacent = sql.get("match_scope") == "adjacent"
     lines = [
-        "## 期刊研究热点",
+        "## 相邻主题线索（非专题直接证据）" if adjacent else "## 期刊研究热点",
         "",
         f"统计区间：{sql.get('start_year') or '不限'}–{sql.get('end_year') or '不限'}",
         "",
     ]
+    if adjacent:
+        lines += [
+            f"> 直接主题「{sql.get('primary_topic')}」未命中；以下仅来自相邻检索词，"
+            "不能据此认定专题已有稳定发文基础。",
+            "",
+        ]
     for index, direction in enumerate(directions, 1):
         lines.extend(
             [
@@ -666,7 +674,11 @@ def try_hot_topics_template(state: JournalState) -> Optional[str]:
                 bits.append(f"[查看全文]({url})")
             lines.append(" ".join(bits))
         lines.append("")
-    lines.append("> 热点按结构化关键词关联论文数排序；“热点”本身未作为检索关键词。")
+    lines.append(
+        "> 相邻线索按结构化关键词关联论文数排序。"
+        if adjacent
+        else "> 热点按结构化关键词关联论文数排序；“热点”本身未作为检索关键词。"
+    )
     return _ensure_ordered_list_markdown("\n".join(lines))
 
 
@@ -691,8 +703,7 @@ def try_top_institutions_template(state: JournalState) -> Optional[str]:
         )
     lines.append("")
     lines.append(
-        "> 说明：机构名按库内规范化字段统计；学院级单位可能分列。"
-        "本库无独立「国籍」字段，「中国作者」题默认按全库机构排名。"
+        "> 说明：机构名按库内规范化字段统计；无法确认等价关系的学院级单位仍可能分列。"
     )
     return _ensure_ordered_list_markdown("\n".join(lines))
 
@@ -714,9 +725,11 @@ def try_top_authors_template(state: JournalState) -> Optional[str]:
     ]
     for i, a in enumerate(authors[:top_n], 1):
         name = (a.get("name_zh") or a.get("name") or "").strip() or "（无名）"
-        lines.append(f"{i}. **{name}**（{a.get('paper_count')}篇）")
+        author_id = str(a.get("author_id") or "")
+        id_bit = f"；author_id: `{author_id}`" if author_id else ""
+        lines.append(f"{i}. **{name}**（{a.get('paper_count')}篇{id_bit}）")
     lines.append("")
-    lines.append("> 以上来自本刊结构化发文统计。")
+    lines.append("> 以上来自本刊结构化发文统计；按稳定 author_id 去重，同名作者不自动合并。")
     return _ensure_ordered_list_markdown("\n".join(lines))
 
 
@@ -936,6 +949,15 @@ def try_submission_fit_template(state: JournalState) -> Optional[str]:
     specific_hits = int(cov.get("specific_hits") or 0)
     generic_hits = int(cov.get("generic_hits") or 0)
     effective = cov.get("effective_hits")
+    primary_topic = str(sql.get("primary_topic") or "")
+    direct_hits = int(sql.get("direct_hits") or 0)
+    adjacent_topics = list(sql.get("adjacent_topics") or [])
+    adjacent_hits = int(sql.get("adjacent_hits") or 0)
+    planned_operations = {
+        str(op.get("type"))
+        for op in (plan.get("operations") or [])
+        if isinstance(op, dict)
+    }
     label_zh = {"strong": "较强", "moderate": "中等", "weak": "偏弱"}.get(fit, fit)
     lines = [
         "## 投稿适配评估",
@@ -952,6 +974,13 @@ def try_submission_fit_template(state: JournalState) -> Optional[str]:
         f"- 适合度标签：**{label_zh}**（`{fit}`）",
         f"- 关键词命中篇数（按词累加，可重叠）：**{total}**",
     ]
+    if primary_topic:
+        lines.append(f"- 直接主题「{primary_topic}」命中：**{direct_hits}**")
+        if adjacent_topics:
+            lines.append(
+                f"- 相邻检索词「{'、'.join(adjacent_topics)}」命中：**{adjacent_hits}**；"
+                "该部分只作为相邻证据，不等同于直接命中。"
+            )
     if score_basis == "domain_facet" or score_basis == "generic_only":
         lines.append(
             f"- 主题专指面命中：**{specific_hits}**；宽泛技术词命中：**{generic_hits}**"
@@ -984,12 +1013,12 @@ def try_submission_fit_template(state: JournalState) -> Optional[str]:
             f"**判断：不建议以「{phrase or '、'.join(map(str, queried)) or '该主题'}」"
             "作为向本刊投稿的主方向。**",
             "",
-            "依据：主题含农业/病虫害等专指面，但本刊这些关键词命中为 0；"
+            "依据：用户主题的专指面关键词命中为 0；"
             f"「人工智能」等宽泛技术词虽有 {generic_hits} 篇命中，"
-            "多为治理、教育、法律等人文社科语境，**不能**等同于「AI+农业病虫害」已覆盖。",
+            "可能来自其他研究语境，**不能**等同于用户的复合主题已覆盖。",
             "",
-            "可选下一步：改投农业与生命科学/植保/农业信息类期刊；"
-            "或若坚持本刊，需将问题意识改写为人文社科可对接的议题（并仍可能不被录用）。",
+            "可选下一步：核对期刊当前征稿范围，并优先考察历史上持续发表该专指主题的期刊；"
+            "若继续考虑本刊，应先确认论文问题意识与现有相邻研究是否真正一致。",
             "",
         ]
     else:
@@ -1000,8 +1029,8 @@ def try_submission_fit_template(state: JournalState) -> Optional[str]:
             "依据：结构化关键词命中偏少或为 0。以下不会用证据外旧文、办刊通告，"
             "或仅因“期刊对新技术开放”来论证适合投稿。",
             "",
-            "可选下一步：检索相邻主题（如植保、遥感监测、智能农业）看是否有可改写的契合点；"
-            "或改投更对口的农业信息/植保类期刊。",
+            "可选下一步：检索证据中实际出现的相邻主题，判断是否存在真实契合点；"
+            "也可比较其他历史上持续发表该主题的期刊。",
             "",
         ]
     if topic and any(int(r.get("paper_count") or 0) > 0 for r in topic):
@@ -1009,7 +1038,7 @@ def try_submission_fit_template(state: JournalState) -> Optional[str]:
         for i, r in enumerate(topic, 1):
             lines.append(f"{i}. **{r.get('keyword')}**（{r.get('paper_count')}篇）")
         lines.append("")
-    if papers:
+    if papers and "topic_papers" not in planned_operations:
         lines += ["### 本刊相关论文（仅证据内，可作参考）", ""]
         for i, p in enumerate(papers[:10], 1):
             title = (p.get("title_zh") or p.get("title") or "（无题名）").strip()
@@ -1028,7 +1057,7 @@ def try_submission_fit_template(state: JournalState) -> Optional[str]:
         lines += [
             "### 仅匹配宽泛技术词的论文（不计为主题适配证据）",
             "",
-            "下列论文只命中「人工智能」等通用词，学科语境与「农业病虫害」不对口：",
+            f"下列论文只命中宽泛检索词，不能证明与「{phrase or primary_topic or '目标主题'}」直接相关：",
             "",
         ]
         for i, p in enumerate(generic_papers[:6], 1):
@@ -1395,6 +1424,50 @@ def try_author_template_answer(state: JournalState) -> Optional[str]:
 
 
 def _render_new_operation(op_type: str, data: Dict[str, Any]) -> Optional[str]:
+    if op_type == "author_profile":
+        author = data.get("author") or {}
+        if not author:
+            return None
+        name = author.get("name_zh") or author.get("name_en") or "该作者"
+        return "\n".join(
+            [
+                "## 作者身份与发文概况",
+                "",
+                f"- **作者：** {name}",
+                f"- **author_id：** `{author.get('author_id')}`",
+                f"- **本刊去重发文量：** {data.get('total_papers')} 篇",
+                f"- **发表区间：** {data.get('year_min')}–{data.get('year_max')}",
+                "",
+                "> 以上画像按稳定 author_id 汇总；未将同名字符串自动合并。",
+            ]
+        )
+    if op_type == "yearly_counts":
+        rows = data.get("yearly") or []
+        if not rows:
+            return None
+        lines = [f"## 年度发文量（{data.get('start_year')}–{data.get('end_year')}）", ""]
+        lines += [f"- {row.get('year')}：{row.get('paper_count')} 篇" for row in rows]
+        if int(data.get("end_year") or 0) == datetime.now().year:
+            lines += ["", f"> {datetime.now().year} 年为未完年，当前数量不宜与完整年份直接比较。"]
+        return "\n".join(lines)
+    if op_type == "yoy_growth":
+        rows = data.get("yoy") or []
+        if not rows:
+            return None
+        fastest = data.get("fastest_growth") or {}
+        lines = ["## 年度变化与同比", ""]
+        if fastest:
+            lines += [
+                f"增长最快年份：**{fastest.get('year')}**（增加 {fastest.get('delta')} 篇，"
+                f"同比 {fastest.get('yoy_pct')}%）。",
+                "",
+            ]
+        for row in rows[1:]:
+            lines.append(
+                f"- {row.get('year')}：变化 {int(row.get('delta') or 0):+d} 篇，"
+                f"同比 {row.get('yoy_pct')}%"
+            )
+        return "\n".join(lines)
     if op_type == "top_keywords":
         rows = data.get("keywords") or []
         if not rows:
@@ -1406,7 +1479,12 @@ def _render_new_operation(op_type: str, data: Dict[str, Any]) -> Optional[str]:
         rows = data.get("institutions") or []
         if not rows:
             return None
-        lines = [f"## 主题「{data.get('keyword') or ''}」相关机构", ""]
+        title = (
+            f"相邻检索词相关机构（直接主题「{data.get('primary_topic')}」未命中）"
+            if data.get("match_scope") == "adjacent"
+            else f"主题「{data.get('keyword') or ''}」相关机构"
+        )
+        lines = [f"## {title}", ""]
         lines += [f"{i}. **{r.get('institution')}**（{r.get('paper_count')}篇）" for i, r in enumerate(rows, 1)]
         return "\n".join(lines)
     if op_type == "author_keywords_sample":
@@ -1431,21 +1509,56 @@ def _render_new_operation(op_type: str, data: Dict[str, Any]) -> Optional[str]:
             tag = "，新兴候选" if row.get("emerging") else ""
             lines.append(
                 f"{i}. **{row.get('keyword')}**：前期 {row.get('early_count')} 篇，近期 {row.get('late_count')} 篇，"
-                f"占比变化 {float(row.get('share_delta_pp') or 0):+.3f} 个百分点{tag}"
+                f"占比变化 {float(row.get('share_delta_pp') or 0):+.3f} 个百分点，"
+                f"近期覆盖 {row.get('late_active_years')} 个年份{tag}"
             )
         if data.get("partial_year"):
             lines += ["", f"> {data.get('partial_year')} 年为未完年，已展示原始数据，但未参与增长排序。"]
+        lines += ["", "> 这些只是基于本刊历史发表数据的候选信号，不代表全学科、政策或市场的未来趋势。"]
         return "\n".join(lines)
     if op_type == "topic_period_compare":
         periods = data.get("periods") or []
         topics = data.get("topics") or []
         if len(periods) < 2:
             return None
-        lines = ["## 主题阶段变化", "", f"比较：{periods[0].get('start_year')}–{periods[0].get('end_year')} vs. {periods[1].get('start_year')}–{periods[1].get('end_year')}", ""]
+        title = "领域变化与阶段对照" if data.get("comparison_goal") == "field_evolution" else "主题阶段变化"
+        lines = [f"## {title}", "", f"比较：{periods[0].get('start_year')}–{periods[0].get('end_year')} vs. {periods[1].get('start_year')}–{periods[1].get('end_year')}", ""]
+        enhanced_names = [str(row.get("keyword")) for row in (data.get("enhanced") or [])[:3] if row.get("keyword")]
+        weakened_names = [str(row.get("keyword")) for row in (data.get("weakened") or [])[:3] if row.get("keyword")]
+        if enhanced_names or weakened_names:
+            summary_bits = []
+            if enhanced_names:
+                summary_bits.append("近期占比增强的候选包括" + "、".join(enhanced_names))
+            if weakened_names:
+                summary_bits.append("近期占比减弱的候选包括" + "、".join(weakened_names))
+            lines += ["**核心差异摘要：** " + "；".join(summary_bits) + "。", ""]
         for row in topics:
             delta = float(row.get("share_delta_pp") or 0)
             trend = "增强" if delta > 0 else ("减弱" if delta < 0 else "持平")
             lines.append(f"- **{row.get('keyword')}**：{row.get('early_count')} → {row.get('late_count')} 篇，占比{trend} {abs(delta):.3f} 个百分点")
+        if data.get("include_gap_candidates"):
+            gaps = list(data.get("disappeared") or [])
+            for row in data.get("weakened") or []:
+                if int(row.get("late_count") or 0) <= 1 and row not in gaps:
+                    gaps.append(row)
+            lines += ["", "## 内容缺口候选", ""]
+            if gaps:
+                for row in gaps[:5]:
+                    lines.append(
+                        f"- **{row.get('keyword')}**：近期仅 {row.get('late_count')} 篇；"
+                        "可作为待核查的低覆盖方向，不代表存在外部市场需求。"
+                    )
+            else:
+                lines.append("现有关键词数据未形成明确的低覆盖候选。")
+            lines += [
+                "",
+                "> 预测限制：以上只反映本刊历史发文结构，不能据此推断政策、市场规模或全学科趋势。",
+            ]
+        else:
+            lines += [
+                "",
+                "> 可比性限制：变化按论文占比计算；样本稀疏或关键词标注变化可能影响阶段比较。",
+            ]
         return "\n".join(lines)
     if op_type == "author_topic_summary":
         rows = data.get("keywords") or []
@@ -1456,19 +1569,31 @@ def _render_new_operation(op_type: str, data: Dict[str, Any]) -> Optional[str]:
         lines += [f"{i}. **{r.get('keyword')}**（{r.get('paper_count')}篇）" for i, r in enumerate(rows, 1)]
         return "\n".join(lines)
     if op_type == "author_direction_evolution":
-        author = data.get("author") or {}
-        periods = data.get("periods") or []
-        if not periods:
+        evolutions = data.get("authors") or [data]
+        if not evolutions:
             return None
-        lines = [f"## {author.get('name_zh') or '该作者'}研究方向演化", ""]
-        for period in periods:
-            kws = "、".join(f"{r.get('keyword')}（{r.get('paper_count')}篇）" for r in (period.get("keywords") or [])[:6]) or "无足够关键词"
-            lines += [f"### {period.get('label')}（{period.get('start_year')}–{period.get('end_year')}）", "", f"发文 {period.get('paper_count')} 篇；主要主题：{kws}", ""]
-        changes = data.get("changes") or []
-        if changes:
-            lines += ["### 前后期变化", ""]
-            for row in changes[:10]:
-                lines.append(f"- **{row.get('keyword')}**：{row.get('change')}（占比变化 {float(row.get('share_delta_pp') or 0):+.1f} 个百分点）")
+        lines = ["## 作者研究方向演化", ""]
+        for evolution in evolutions:
+            if evolution.get("evolution"):
+                evolution = evolution["evolution"]
+            author = evolution.get("author") or {}
+            periods = evolution.get("periods") or []
+            if not periods:
+                continue
+            lines += [f"### {author.get('name_zh') or author.get('name_en') or '该作者'}", ""]
+            for period in periods:
+                kws = "、".join(f"{r.get('keyword')}（{r.get('paper_count')}篇）" for r in (period.get("keywords") or [])[:6]) or "无足够关键词"
+                lines.append(
+                    f"- **{period.get('label')}（{period.get('start_year')}–{period.get('end_year')}）**："
+                    f"发文 {period.get('paper_count')} 篇；主要主题：{kws}"
+                )
+            changes = evolution.get("changes") or []
+            if changes:
+                change_text = "；".join(
+                    f"{row.get('keyword')} {row.get('change')} {float(row.get('share_delta_pp') or 0):+.1f}pp"
+                    for row in changes[:5]
+                )
+                lines += [f"- 前后期变化：{change_text}", ""]
         return "\n".join(lines)
     if op_type == "author_direction_diversity":
         rows = data.get("authors") or []
@@ -1483,14 +1608,193 @@ def _render_new_operation(op_type: str, data: Dict[str, Any]) -> Optional[str]:
         rows = data.get("institutions") or []
         if not rows:
             return None
-        lines = [f"## 长期高产机构（{data.get('start_year')}–{data.get('end_year')}）", ""]
+        lines = [
+            f"## 长期高产机构（{data.get('start_year')}–{data.get('end_year')}）",
+            "",
+            "判定定义：至少覆盖 5 个完整年份；活跃年份率不低于 80%，且进入年度 Top10 的年份率不低于 50%。",
+            "",
+        ]
         for i, row in enumerate(rows, 1):
             tag = "稳定高产" if row.get("stable_high_output") else "未达到稳定阈值"
             lines.append(
                 f"{i}. **{row.get('institution')}**：累计 {row.get('total_papers')} 篇，活跃 {row.get('active_years')} 年，"
                 f"进入年度 Top10 {row.get('top10_years')} 年（{tag}）"
             )
+        lines += ["", "> 机构名称按规范化字段合并空格与编号变体；无法确认的别名不强制合并。"]
         return "\n".join(lines)
+    if op_type == "coauthored_papers":
+        papers = data.get("papers") or []
+        author_a = data.get("author_name_a") or (data.get("author_a") or {}).get("name_zh")
+        author_b = data.get("author_name_b") or (data.get("author_b") or {}).get("name_zh")
+        title = f"{author_a} 与 {author_b} 的合著论文" if author_a and author_b else "代表合作论文"
+        lines = [f"## {title}", ""]
+        if not papers:
+            return "\n".join(lines + ["现有数据中没有可追溯的共同署名论文。"])
+        for i, paper in enumerate(papers, 1):
+            title = paper.get("title_zh") or paper.get("title") or "（无题名）"
+            doi = str(paper.get("doi") or "")
+            link = doi_url(doi)
+            lines.append(
+                f"{i}. **{title}**（{paper.get('year')}）；DOI: {doi}"
+                + (f"；[查看全文]({link})" if link else "")
+            )
+        return _ensure_ordered_list_markdown("\n".join(lines))
+    if op_type in {"topic_papers", "representative_papers_by_topic", "author_papers", "representative_papers_by_institution"}:
+        groups = data.get("topics") or data.get("authors") or data.get("institutions") or []
+        title = "作者论文" if op_type == "author_papers" else (
+            "主题论文" if op_type == "topic_papers" else "代表论文"
+        )
+        lines: List[str] = []
+        related = data.get("related_keywords") or []
+        if op_type == "topic_papers" and related:
+            lines += ["## 主题概览", ""]
+            for group in related:
+                keywords = "、".join(
+                    f"{row.get('keyword')}（{row.get('paper_count')}篇）"
+                    for row in (group.get("keywords") or [])[:8]
+                    if row.get("keyword")
+                )
+                lines.append(
+                    f"- **{group.get('topic')}**：相关子方向候选为 {keywords or '暂无足够的共现关键词证据'}。"
+                )
+            lines.append("")
+        lines += [f"## {title}", ""]
+        if op_type in {"topic_papers", "author_papers"}:
+            shown = int(data.get("shown_count") or len(data.get("papers") or []))
+            total = int(data.get("total_count") or shown)
+            offset = int(data.get("offset") or 0)
+            lines += [
+                f"检索区间：{data.get('start_year') or '不限'}–{data.get('end_year') or '不限'}；"
+                f"本次展示第 {offset + 1 if shown else 0}–{offset + shown} 条，共 {total} 篇。",
+                "",
+            ]
+        if groups:
+            missing_group_labels: List[str] = []
+            for group in groups:
+                label = (
+                    group.get("topic") or group.get("keyword") or group.get("name_zh")
+                    or group.get("author_name") or group.get("institution") or "相关结果"
+                )
+                papers = group.get("papers") or []
+                if not papers and op_type == "representative_papers_by_institution":
+                    missing_group_labels.append(str(label))
+                    continue
+                group_total = group.get("paper_count")
+                count_label = (
+                    f"本次 {len(papers)} / 共 {group_total} 篇"
+                    if group_total is not None and int(group_total) != len(papers)
+                    else f"{len(papers)}篇"
+                )
+                lines += [f"### {label}（{count_label}）", ""]
+                for i, paper in enumerate(papers, 1):
+                    title = paper.get("title_zh") or paper.get("title") or "（无题名）"
+                    doi = str(paper.get("doi") or "")
+                    link = doi_url(doi)
+                    author_text = "、".join(str(name) for name in (paper.get("authors") or []) if name)
+                    suffix = f"；作者：{author_text}" if author_text else ""
+                    suffix += f"；DOI: {doi}" if doi else ""
+                    if link:
+                        suffix += f"；[查看全文]({link})"
+                    lines.append(f"{i}. **{title}**（{paper.get('year')}）{suffix}")
+                lines.append("")
+            if missing_group_labels:
+                lines += [
+                    "> 以下机构在当前筛选和代表性过滤下没有可展示论文："
+                    + "、".join(missing_group_labels)
+                    + "。",
+                    "",
+                ]
+        else:
+            for i, paper in enumerate(data.get("papers") or [], 1):
+                title = paper.get("title_zh") or paper.get("title") or "（无题名）"
+                doi = str(paper.get("doi") or "")
+                link = doi_url(doi)
+                author_text = "、".join(str(name) for name in (paper.get("authors") or []) if name)
+                suffix = f"；作者：{author_text}" if author_text else ""
+                suffix += f"；DOI: {doi}" if doi else ""
+                if link:
+                    suffix += f"；[查看全文]({link})"
+                lines.append(f"{i}. **{title}**（{paper.get('year')}）{suffix}")
+        if data.get("has_more"):
+            lines += [
+                "",
+                f"> 内容较长，已展示 {int(data.get('offset') or 0) + int(data.get('shown_count') or 0)}/"
+                f"{int(data.get('total_count') or 0)} 条。输入“继续”可列出剩余论文。",
+            ]
+        if op_type == "topic_papers":
+            lines += [
+                "",
+                "> 检索口径：论文关键词字段包含所查主题；未写入关键词字段的相关论文可能遗漏。",
+            ]
+        return "\n".join(lines).strip() if len(lines) > 2 else None
+    if op_type in {"authors_by_keyword", "representative_authors_by_topic"}:
+        rows = data.get("authors") or []
+        if not rows:
+            return None
+        title = (
+            f"相邻检索词相关作者（直接主题「{data.get('primary_topic')}」未命中）"
+            if data.get("match_scope") == "adjacent"
+            else f"主题「{data.get('keyword') or '、'.join(data.get('topics') or [])}」代表作者"
+        )
+        lines = [f"## {title}", ""]
+        for i, row in enumerate(rows, 1):
+            topics = "、".join(row.get("topics") or [])
+            suffix = f"；涉及 {topics}" if topics else ""
+            lines.append(f"{i}. **{row.get('name_zh') or row.get('name_en')}**（{row.get('paper_count')}篇）{suffix}")
+        return "\n".join(lines)
+    if op_type == "topic_yearly":
+        series = data.get("yearly_by_keyword") or {}
+        if not series:
+            return None
+        lines = ["## 主题年度变化", ""]
+        for topic, rows in series.items():
+            values = "、".join(f"{row.get('year')}年 {row.get('paper_count')}篇" for row in rows)
+            lines.append(f"- **{topic}**：{values or '无命中'}")
+        return "\n".join(lines)
+    if op_type == "author_collaborators":
+        groups = data.get("authors") or []
+        if not groups:
+            return None
+        lines = ["## 主要合作者", ""]
+        for group in groups:
+            author = group.get("author") or {}
+            lines += [f"### {author.get('name_zh') or author.get('name_en')}", ""]
+            collaborators = group.get("collaborators") or []
+            for i, row in enumerate(collaborators[:3], 1):
+                lines.append(f"{i}. **{row.get('name_zh') or row.get('name_en')}**（共同 {row.get('co_papers')} 篇）")
+            if len(collaborators) > 3:
+                lines.append(f"> 展示前 3/{len(collaborators)} 位合作者；完整共同论文关系保留在证据结果中。")
+            lines.append("")
+        return "\n".join(lines)
+    if op_type in {"author_network", "institution_network"}:
+        rows = data.get("edges") or []
+        title = "作者合作网络" if op_type == "author_network" else "机构合作网络"
+        if not rows:
+            if data.get("query_completed"):
+                topic = data.get("topic") or "当前条件"
+                return f"## {title}\n\n在主题「{topic}」的限定结果集合内，未发现可由共同署名论文证明的合作边。"
+            return None
+        lines = [f"## {title}", ""]
+        for i, row in enumerate(rows, 1):
+            lines.append(
+                f"{i}. **{row.get('source_name') or row.get('source_id')} ↔ "
+                f"{row.get('target_name') or row.get('target_id')}**（共同 {row.get('paper_count')} 篇）"
+            )
+        lines += [
+            "",
+            "> 网络边界：仅展示当前主题 ResultSet 内、且能由共同 DOI 回溯的署名关系；“核心”不等同于学术影响力。",
+        ]
+        return "\n".join(lines)
+    if op_type == "submission_guidance":
+        if data.get("fit_label") is None:
+            return None
+        labels = {"strong": "匹配度较高", "moderate": "有一定匹配", "weak": "直接证据较弱"}
+        label = labels.get(data.get("fit_label"), str(data.get("fit_label")))
+        return (
+            "## 投稿建议\n\n"
+            f"基于历史发表数据，当前判断为**{label}**；检索到 {data.get('total_hits') or 0} 条关键词命中。"
+            "该结论是投稿定位建议，不代表当前编辑政策或录用承诺。"
+        )
     return None
 
 
@@ -1548,8 +1852,19 @@ def ensure_answer_operation_coverage(text: str, state: JournalState) -> str:
                 additions.append(section)
         else:
             reasons = "；".join(result.get("missing_requirements") or []) or "现有数据不足以完整支持该目标"
+            titles = {
+                "topic_yearly": "主题年度变化",
+                "topic_period_compare": "主题阶段对比",
+                "representative_papers_by_topic": "主题代表论文",
+                "topic_papers": "主题论文",
+                "submission_guidance": "投稿建议",
+                "coauthored_papers": "合作论文",
+            }
+            topics = list((state.get("query_plan") or {}).get("keywords") or [])
+            scope = f"\n\n查询主题：{'、'.join(map(str, topics))}。" if topics else ""
             additions.append(
-                f"## {op_type}\n\n证据不足：{reasons}。基于已有相邻证据只能作为可能趋势或候选判断，不能视为确定事实。"
+                f"## {titles.get(op_type, op_type)}{scope}\n\n证据不足：{reasons}。"
+                "基于已有相邻证据只能作为可能趋势或候选判断，不能视为确定事实。"
             )
     return (text.rstrip() + "\n\n" + "\n\n".join(additions)).strip() if additions else text
 
@@ -1700,15 +2015,28 @@ def _chunk_text(text: str, size: int = 48) -> Iterator[str]:
         yield text[i : i + size]
 
 
+def _generation_fallback(state: JournalState, error: Exception) -> str:
+    """Return accepted structured evidence when optional synthesis is unavailable."""
+    errors = list(state.get("errors") or [])
+    errors.append(f"generation_degraded: {type(error).__name__}: {error}"[:500])
+    state["errors"] = errors
+    answer = ensure_answer_operation_coverage("", state)
+    note = "\n\n> 生成模型暂不可用；以上按现有结构化证据直接呈现，综合解释可能不完整。"
+    return (answer.rstrip() + note).strip()
+
+
 def stream_generate(state: JournalState) -> Iterator[str]:
     templated = try_operation_plan_answer(state) or try_author_template_answer(state)
     if templated:
-        yield from _chunk_text(enforce_evidence_constraints(templated, state))
-        return
-    chat = MiniMaxChat(get_settings())
-    # Buffer before SSE so coverage/evidence checks apply to the exact answer
-    # eventually shown to the user.
-    raw = chat.chat(build_generate_messages(state), max_tokens=8192)
+        raw = templated
+    else:
+        chat = MiniMaxChat(get_settings())
+        # The model response is buffered; the caller only sees chunks after
+        # coverage and evidence gates have accepted (or replaced) the answer.
+        try:
+            raw = chat.chat(build_generate_messages(state), max_tokens=8192)
+        except Exception as error:  # optional wording must not discard accepted evidence
+            raw = _generation_fallback(state, error)
     answer = finalize_answer(raw, state.get("intents") or [], state)
     yield from _chunk_text(answer)
 
@@ -1722,6 +2050,30 @@ def finalize_answer(
     if state is not None:
         text = enforce_evidence_constraints(text, state)
         text = ensure_answer_operation_coverage(text, state)
+        from app.agents.coverage import assess_answer_coverage, assess_quality
+
+        quality = assess_quality(text, state)
+        unsafe = any(
+            str(violation).startswith(
+                (
+                    "unsupported_doi:",
+                    "unsupported_number:",
+                    "unsupported_entity:",
+                    "unsupported_paper_title:",
+                    "unsupported_paper_year:",
+                    "answer_missing_operation:",
+                )
+            )
+            for violation in quality.get("hard_gate_violations") or []
+        )
+        if unsafe:
+            fallback = ensure_answer_operation_coverage("", state)
+            text = enforce_evidence_constraints(fallback, state)
+            quality = assess_quality(text, state)
+        state["answer_coverage"] = assess_answer_coverage(
+            text, state.get("operation_results") or []
+        )
+        state["quality_report"] = quality
     return text
 
 
@@ -1731,6 +2083,9 @@ def generate_node(state: JournalState) -> Dict[str, Any]:
     if templated:
         return {"answer": finalize_answer(templated, intents, state)}
     chat = MiniMaxChat(get_settings())
-    answer = chat.chat(build_generate_messages(state), max_tokens=8192)
+    try:
+        answer = chat.chat(build_generate_messages(state), max_tokens=8192)
+    except Exception as error:  # keep the non-streaming graph equally resilient
+        answer = _generation_fallback(state, error)
     answer = finalize_answer(answer, intents, state)
     return {"answer": answer}
