@@ -96,3 +96,4 @@ default_tools_approval_mode = "writes"
 
 - Agent 的业务调用规则与典型编排：[AGENT_GUIDE.md](AGENT_GUIDE.md)
 - 工具、部署与测试的完整技术说明：[docs/MCP.md](docs/MCP.md)
+- 作者与编辑的公开使用手册：<https://journals.up.railway.app/guide>

@@ -1,0 +1,773 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="关系期刊知识服务 MCP 的作者与编辑使用手册。">
+  <meta name="theme-color" content="#123c4a">
+  <title>关系期刊知识服务｜作者与编辑使用手册</title>
+  <style>
+    :root {
+      --ink: #142d36;
+      --ink-soft: #49636c;
+      --paper: #f7faf9;
+      --field: #e9f1ef;
+      --line: #bfd0cd;
+      --jade: #0e716b;
+      --jade-dark: #07514f;
+      --signal: #c64b31;
+      --white: #ffffff;
+      --display: "Songti SC", "STSong", "Noto Serif CJK SC", ui-serif, serif;
+      --body: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      --max: 1120px;
+    }
+
+    * { box-sizing: border-box; }
+
+    html {
+      scroll-behavior: smooth;
+      scroll-padding-top: 84px;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--field);
+      font-family: var(--body);
+      line-height: 1.72;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    a { color: inherit; }
+
+    button, a { -webkit-tap-highlight-color: transparent; }
+
+    :focus-visible {
+      outline: 3px solid rgba(198, 75, 49, .45);
+      outline-offset: 3px;
+    }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      border-bottom: 1px solid rgba(191, 208, 205, .9);
+      background: rgba(247, 250, 249, .94);
+      backdrop-filter: blur(14px);
+    }
+
+    .topbar-inner {
+      width: min(var(--max), calc(100% - 40px));
+      min-height: 64px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 11px;
+      text-decoration: none;
+      font-weight: 700;
+      letter-spacing: .02em;
+    }
+
+    .brand-mark {
+      width: 25px;
+      height: 31px;
+      border: 2px solid var(--jade-dark);
+      position: relative;
+    }
+
+    .brand-mark::before,
+    .brand-mark::after {
+      content: "";
+      position: absolute;
+      left: 5px;
+      right: 5px;
+      height: 2px;
+      background: var(--signal);
+    }
+
+    .brand-mark::before { top: 9px; }
+    .brand-mark::after { top: 17px; }
+
+    .nav {
+      display: flex;
+      gap: 22px;
+      font-size: 14px;
+      color: var(--ink-soft);
+    }
+
+    .nav a {
+      padding: 7px 0;
+      text-decoration: none;
+      border-bottom: 2px solid transparent;
+    }
+
+    .nav a:hover { border-color: var(--signal); color: var(--ink); }
+
+    main {
+      width: min(var(--max), calc(100% - 40px));
+      margin: 0 auto;
+    }
+
+    .hero {
+      min-height: 590px;
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(320px, .65fr);
+      align-items: center;
+      gap: 78px;
+      padding: 86px 0 72px;
+    }
+
+    .eyebrow {
+      margin: 0 0 24px;
+      color: var(--jade);
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+    }
+
+    h1, h2, h3 { font-family: var(--display); }
+
+    h1 {
+      max-width: 760px;
+      margin: 0;
+      font-size: clamp(44px, 6.4vw, 82px);
+      font-weight: 700;
+      line-height: 1.09;
+      letter-spacing: -.045em;
+    }
+
+    .hero-lead {
+      max-width: 660px;
+      margin: 30px 0 0;
+      color: var(--ink-soft);
+      font-size: 18px;
+    }
+
+    .role-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 32px;
+    }
+
+    .role-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 44px;
+      padding: 8px 16px;
+      border: 1px solid var(--jade-dark);
+      background: transparent;
+      color: var(--jade-dark);
+      text-decoration: none;
+      font-weight: 700;
+    }
+
+    .role-link.primary { background: var(--jade-dark); color: var(--white); }
+    .role-link:hover { transform: translateY(-2px); }
+
+    .evidence-spine {
+      position: relative;
+      padding: 30px 28px 30px 54px;
+      border: 1px solid var(--line);
+      background: var(--paper);
+      box-shadow: 12px 12px 0 rgba(14, 113, 107, .08);
+    }
+
+    .evidence-spine::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 25px;
+      width: 2px;
+      background: var(--signal);
+    }
+
+    .spine-label {
+      margin: 0 0 22px;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--signal);
+      letter-spacing: .12em;
+    }
+
+    .flow-step {
+      position: relative;
+      padding: 16px 0 17px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .flow-step:last-child { border-bottom: 0; }
+
+    .flow-step::before {
+      content: "";
+      position: absolute;
+      left: -35px;
+      top: 24px;
+      width: 9px;
+      height: 9px;
+      border: 2px solid var(--signal);
+      background: var(--paper);
+      border-radius: 50%;
+    }
+
+    .flow-step small {
+      display: block;
+      color: var(--ink-soft);
+      font-family: var(--mono);
+      font-size: 11px;
+    }
+
+    .flow-step strong { display: block; font-size: 17px; }
+
+    .section {
+      margin: 0 0 26px;
+      padding: 72px;
+      border: 1px solid var(--line);
+      background: var(--paper);
+    }
+
+    .section-head {
+      display: grid;
+      grid-template-columns: 220px minmax(0, 1fr);
+      gap: 48px;
+      margin-bottom: 46px;
+    }
+
+    .section-kicker {
+      margin: 8px 0 0;
+      font-family: var(--mono);
+      color: var(--signal);
+      font-size: 12px;
+      letter-spacing: .1em;
+    }
+
+    h2 {
+      margin: 0 0 14px;
+      font-size: clamp(31px, 4vw, 48px);
+      line-height: 1.2;
+      letter-spacing: -.025em;
+    }
+
+    .section-intro { max-width: 720px; margin: 0; color: var(--ink-soft); }
+
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .step { padding: 28px; border-right: 1px solid var(--line); }
+    .step:first-child { padding-left: 0; }
+    .step:last-child { border-right: 0; padding-right: 0; }
+
+    .step-num {
+      display: block;
+      margin-bottom: 18px;
+      color: var(--signal);
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    .step h3 { margin: 0 0 9px; font-size: 22px; }
+    .step p { margin: 0; color: var(--ink-soft); font-size: 15px; }
+
+    .config-panel {
+      margin-top: 34px;
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(300px, .9fr);
+      border: 1px solid var(--line);
+      background: var(--white);
+    }
+
+    .config-fields { padding: 28px; }
+
+    .field-row {
+      display: grid;
+      grid-template-columns: 120px minmax(0, 1fr);
+      gap: 18px;
+      padding: 13px 0;
+      border-bottom: 1px solid #e3ecea;
+    }
+
+    .field-row:last-child { border-bottom: 0; }
+    .field-row span { color: var(--ink-soft); font-size: 14px; }
+    .field-row code { overflow-wrap: anywhere; font-family: var(--mono); font-size: 13px; }
+
+    .connection-copy {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 28px;
+      color: var(--white);
+      background: var(--ink);
+    }
+
+    .connection-copy p { margin: 0 0 24px; color: #c8d7da; font-size: 14px; }
+
+    .copy-row { display: flex; align-items: stretch; }
+
+    .copy-value {
+      flex: 1;
+      padding: 12px 13px;
+      overflow-wrap: anywhere;
+      border: 1px solid #547079;
+      border-right: 0;
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    .copy-button {
+      min-width: 72px;
+      border: 0;
+      background: var(--signal);
+      color: var(--white);
+      font: 700 13px var(--body);
+      cursor: pointer;
+    }
+
+    .copy-button:hover { background: #a83b27; }
+
+    .note {
+      margin-top: 24px;
+      padding: 16px 18px;
+      border-left: 3px solid var(--signal);
+      background: #f2f6f5;
+      color: var(--ink-soft);
+      font-size: 14px;
+    }
+
+    .manual-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 22px;
+    }
+
+    .use-card {
+      min-height: 250px;
+      padding: 28px;
+      border: 1px solid var(--line);
+      background: var(--white);
+    }
+
+    .use-tag {
+      display: inline-block;
+      margin-bottom: 22px;
+      padding-bottom: 5px;
+      border-bottom: 2px solid var(--signal);
+      color: var(--jade-dark);
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .08em;
+    }
+
+    .use-card h3 { margin: 0 0 12px; font-size: 24px; }
+    .use-card p { margin: 0 0 18px; color: var(--ink-soft); }
+
+    .prompt {
+      position: relative;
+      margin: 0;
+      padding: 18px 48px 18px 18px;
+      border-left: 3px solid var(--jade);
+      background: #edf4f2;
+      font-size: 14px;
+    }
+
+    .prompt .mini-copy {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      width: 30px;
+      height: 30px;
+      border: 1px solid var(--line);
+      background: var(--white);
+      color: var(--ink-soft);
+      cursor: pointer;
+    }
+
+    .prompt .mini-copy:hover { border-color: var(--jade); color: var(--jade); }
+
+    .journal-table {
+      width: 100%;
+      margin-top: 34px;
+      border-collapse: collapse;
+      background: var(--white);
+    }
+
+    .journal-table th,
+    .journal-table td {
+      padding: 17px 18px;
+      text-align: left;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .journal-table th {
+      color: var(--ink-soft);
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: .08em;
+    }
+
+    .journal-table code { color: var(--jade-dark); font-weight: 700; }
+
+    .boundary-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0;
+      border: 1px solid var(--line);
+      background: var(--white);
+    }
+
+    .boundary {
+      padding: 32px;
+      border-right: 1px solid var(--line);
+    }
+
+    .boundary:last-child { border-right: 0; }
+    .boundary h3 { margin: 0 0 16px; font-size: 24px; }
+    .boundary ul { margin: 0; padding-left: 20px; color: var(--ink-soft); }
+    .boundary li + li { margin-top: 8px; }
+
+    .boundary.can h3::before { content: "✓ "; color: var(--jade); }
+    .boundary.cannot h3::before { content: "× "; color: var(--signal); }
+
+    .faq { border-top: 1px solid var(--line); }
+
+    details { border-bottom: 1px solid var(--line); }
+
+    summary {
+      padding: 20px 42px 20px 0;
+      position: relative;
+      cursor: pointer;
+      font-weight: 700;
+      list-style: none;
+    }
+
+    summary::-webkit-details-marker { display: none; }
+
+    summary::after {
+      content: "+";
+      position: absolute;
+      right: 8px;
+      color: var(--signal);
+      font: 24px var(--mono);
+    }
+
+    details[open] summary::after { content: "−"; }
+    details p { max-width: 760px; margin: -4px 0 22px; color: var(--ink-soft); }
+
+    footer {
+      width: min(var(--max), calc(100% - 40px));
+      margin: 0 auto;
+      padding: 36px 0 58px;
+      display: flex;
+      justify-content: space-between;
+      gap: 24px;
+      color: var(--ink-soft);
+      font-size: 13px;
+    }
+
+    footer a { color: var(--jade-dark); }
+
+    @media (max-width: 900px) {
+      .nav { display: none; }
+      .hero { grid-template-columns: 1fr; gap: 44px; padding-top: 64px; }
+      .hero-lead { font-size: 17px; }
+      .evidence-spine { max-width: 560px; }
+      .section { padding: 48px 34px; }
+      .section-head { grid-template-columns: 1fr; gap: 6px; }
+      .config-panel { grid-template-columns: 1fr; }
+      .manual-grid { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 640px) {
+      .topbar-inner, main, footer { width: min(100% - 24px, var(--max)); }
+      .topbar-inner { min-height: 58px; }
+      .brand { font-size: 14px; }
+      .hero { min-height: auto; padding: 52px 4px 44px; }
+      h1 { font-size: clamp(40px, 13vw, 58px); }
+      .role-links { flex-direction: column; align-items: stretch; }
+      .role-link { justify-content: center; }
+      .section { padding: 38px 20px; }
+      .steps { grid-template-columns: 1fr; }
+      .step, .step:first-child, .step:last-child { padding: 22px 0; border-right: 0; border-bottom: 1px solid var(--line); }
+      .step:last-child { border-bottom: 0; }
+      .config-fields, .connection-copy, .use-card, .boundary { padding: 22px; }
+      .field-row { grid-template-columns: 1fr; gap: 3px; }
+      .boundary-grid { grid-template-columns: 1fr; }
+      .boundary { border-right: 0; border-bottom: 1px solid var(--line); }
+      .boundary:last-child { border-bottom: 0; }
+      .journal-table { display: block; overflow-x: auto; white-space: nowrap; }
+      footer { flex-direction: column; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { transition-duration: .01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="#top" aria-label="返回使用手册顶部">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span>关系期刊知识服务</span>
+      </a>
+      <nav class="nav" aria-label="页面导航">
+        <a href="#connect">开始连接</a>
+        <a href="#author">作者手册</a>
+        <a href="#editor">编辑手册</a>
+        <a href="#boundaries">结果边界</a>
+        <a href="#help">排查问题</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="top">
+    <section class="hero" aria-labelledby="hero-title">
+      <div>
+        <p class="eyebrow">Evidence-first journal service · 使用手册</p>
+        <h1 id="hero-title">把问题交给智能体，把答案落到期刊证据上。</h1>
+        <p class="hero-lead">在你已经使用的通用智能体客户端中连接一次，即可查询论文、主题趋势、作者与机构关系，并获得带 DOI 和在线链接的回答。</p>
+        <div class="role-links">
+          <a class="role-link primary" href="#author">我是作者 <span aria-hidden="true">→</span></a>
+          <a class="role-link" href="#editor">我是编辑 <span aria-hidden="true">→</span></a>
+        </div>
+      </div>
+      <aside class="evidence-spine" aria-label="服务工作方式">
+        <p class="spine-label">一次提问的证据路径</p>
+        <div class="flow-step"><small>INPUT</small><strong>你提出期刊业务问题</strong></div>
+        <div class="flow-step"><small>PLAN</small><strong>通用智能体选择工具</strong></div>
+        <div class="flow-step"><small>QUERY</small><strong>MCP 查询期刊数据</strong></div>
+        <div class="flow-step"><small>ANSWER</small><strong>返回结论与论文证据</strong></div>
+      </aside>
+    </section>
+
+    <section class="section" id="connect" aria-labelledby="connect-title">
+      <div class="section-head">
+        <p class="section-kicker">开始连接</p>
+        <div>
+          <h2 id="connect-title">三步接入你的智能体</h2>
+          <p class="section-intro">客户端的菜单名称可能不同，通常位于“工具”“连接器”或“MCP Servers”。你只需要服务地址和管理员提供的访问 Token。</p>
+        </div>
+      </div>
+
+      <div class="steps">
+        <article class="step">
+          <span class="step-num">STEP 01</span>
+          <h3>添加远程 MCP</h3>
+          <p>新建一个名为“关系期刊知识服务”的 Streamable HTTP MCP。</p>
+        </article>
+        <article class="step">
+          <span class="step-num">STEP 02</span>
+          <h3>填写地址与 Token</h3>
+          <p>粘贴下方地址，鉴权选择 Bearer Token。不要把 Token 写进聊天消息。</p>
+        </article>
+        <article class="step">
+          <span class="step-num">STEP 03</span>
+          <h3>保存并测试</h3>
+          <p>看到期刊工具列表后，直接用自然语言提问，无需记住工具名称。</p>
+        </article>
+      </div>
+
+      <div class="config-panel">
+        <div class="config-fields" aria-label="连接字段">
+          <div class="field-row"><span>名称</span><code>关系期刊知识服务</code></div>
+          <div class="field-row"><span>传输方式</span><code>Streamable HTTP</code></div>
+          <div class="field-row"><span>服务地址</span><code>https://journals.up.railway.app/mcp</code></div>
+          <div class="field-row"><span>鉴权方式</span><code>Bearer Token</code></div>
+          <div class="field-row"><span>Token</span><code>向服务管理员获取</code></div>
+        </div>
+        <div class="connection-copy">
+          <div>
+            <p>复制 MCP 地址。Token 请单独保存在客户端的 Secret 或环境变量中。</p>
+            <div class="copy-row">
+              <span class="copy-value" id="mcp-url">https://journals.up.railway.app/mcp</span>
+              <button class="copy-button" type="button" data-copy="mcp-url">复制</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <p class="note"><strong>隐私提醒：</strong>投稿匹配通常只需要标题、摘要和关键词。不要上传作者身份证明、联系方式、审稿意见或其他与分析无关的敏感信息；未公开稿件还应遵循你所用智能体客户端的隐私政策。</p>
+    </section>
+
+    <section class="section" id="author" aria-labelledby="author-title">
+      <div class="section-head">
+        <p class="section-kicker">作者使用手册</p>
+        <div>
+          <h2 id="author-title">从“适不适合”走到“证据是什么”</h2>
+          <p class="section-intro">告诉智能体目标期刊、研究主题和你希望解决的问题。稿件分析建议提供标题、摘要和关键词，而不是只给一个宽泛主题。</p>
+        </div>
+      </div>
+
+      <div class="manual-grid">
+        <article class="use-card">
+          <span class="use-tag">投稿内容匹配</span>
+          <h3>判断研究是否贴近期刊历史内容</h3>
+          <p>获得匹配强弱、相近主题和代表论文，但不把结果当作录用预测。</p>
+          <blockquote class="prompt" id="author-prompt-1">请使用关系期刊知识服务，评估以下研究与 ZDXBNXB 历史内容的匹配程度，并用相似论文解释原因。标题：……；摘要：……；关键词：……<button class="mini-copy" type="button" data-copy="author-prompt-1" aria-label="复制示例问题">⧉</button></blockquote>
+        </article>
+        <article class="use-card">
+          <span class="use-tag">查找相似论文</span>
+          <h3>为写作与投稿准备相关阅读</h3>
+          <p>可限定年份和阅读目标，并要求返回 DOI 与在线链接。</p>
+          <blockquote class="prompt" id="author-prompt-2">请在 ZDXBNXB 中查找与“水稻抗病机制”相近的论文，优先近十年，列出标题、作者、年份、DOI、在线链接和推荐理由。<button class="mini-copy" type="button" data-copy="author-prompt-2" aria-label="复制示例问题">⧉</button></blockquote>
+        </article>
+        <article class="use-card">
+          <span class="use-tag">主题学习</span>
+          <h3>了解一个方向在本刊的发展</h3>
+          <p>查看年度变化、代表主题和论文证据，避免只看搜索结果数量下结论。</p>
+          <blockquote class="prompt" id="author-prompt-3">请分析 ZDXBRWB 中“数字经济”主题近十年的发文趋势，并列出趋势变化最明显阶段的代表论文。<button class="mini-copy" type="button" data-copy="author-prompt-3" aria-label="复制示例问题">⧉</button></blockquote>
+        </article>
+        <article class="use-card">
+          <span class="use-tag">作者与机构</span>
+          <h3>查看本刊范围内的研究画像</h3>
+          <p>同名时先确认候选；画像只代表作者或机构在本刊收录数据中的活动。</p>
+          <blockquote class="prompt" id="author-prompt-4">请在 ZDXBNXB 中解析作者“张三”，如果存在多个候选先让我确认；确认后总结其本刊论文、主题和合作关系，并附共同论文证据。<button class="mini-copy" type="button" data-copy="author-prompt-4" aria-label="复制示例问题">⧉</button></blockquote>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="editor" aria-labelledby="editor-title">
+      <div class="section-head">
+        <p class="section-kicker">编辑使用手册</p>
+        <div>
+          <h2 id="editor-title">用统一口径观察选题、作者与结构变化</h2>
+          <p class="section-intro">编辑问题应明确期刊、时间范围、比较对象和排序依据。需要统计时，让智能体调用聚合和趋势工具，不要自行汇总展示列表。</p>
+        </div>
+      </div>
+
+      <div class="manual-grid">
+        <article class="use-card">
+          <span class="use-tag">选题趋势</span>
+          <h3>分析年度发文变化</h3>
+          <p>按统一公式返回年度序列、斜率和上升、稳定或下降判断。</p>
+          <blockquote class="prompt" id="editor-prompt-1">请分析 ZDXBNXB 2016—2025 年“生物育种”主题的发文趋势，说明统计口径，并提供年度数据和代表论文。<button class="mini-copy" type="button" data-copy="editor-prompt-1" aria-label="复制示例问题">⧉</button></blockquote>
+        </article>
+        <article class="use-card">
+          <span class="use-tag">时期比较</span>
+          <h3>比较两个阶段的主题结构</h3>
+          <p>识别新增、消失、增强和减弱主题，并保留各阶段范围。</p>
+          <blockquote class="prompt" id="editor-prompt-2">比较 ZDXBRWB 2016—2020 年与 2021—2025 年的主题结构，列出增强、减弱、新增和消失主题及代表论文。<button class="mini-copy" type="button" data-copy="editor-prompt-2" aria-label="复制示例问题">⧉</button></blockquote>
+        </article>
+        <article class="use-card">
+          <span class="use-tag">贡献者分析</span>
+          <h3>按明确业务口径排序</h3>
+          <p>可以按发文量、持续性、主题覆盖或合作强度排序，但不能解释为学术质量排名。</p>
+          <blockquote class="prompt" id="editor-prompt-3">请按发文持续性排序 ZDXBNXB 近十年的作者，给出前十名、计算依据和每位作者的年度活动证据。<button class="mini-copy" type="button" data-copy="editor-prompt-3" aria-label="复制示例问题">⧉</button></blockquote>
+        </article>
+        <article class="use-card">
+          <span class="use-tag">合作结构</span>
+          <h3>查看共同署名网络</h3>
+          <p>通过共同论文查看作者或机构的连接，不能推断导师、团队或现实组织关系。</p>
+          <blockquote class="prompt" id="editor-prompt-4">请分析 ZDXBRWB 中“共同富裕”主题相关作者的合作网络，列出主要连接及支撑每条连接的共同论文。<button class="mini-copy" type="button" data-copy="editor-prompt-4" aria-label="复制示例问题">⧉</button></blockquote>
+        </article>
+      </div>
+
+      <table class="journal-table">
+        <thead><tr><th>期刊代码</th><th>适用范围</th><th>提问时如何写</th></tr></thead>
+        <tbody>
+          <tr><td><code>ZDXBNXB</code></td><td>农业与生命科学版</td><td>“请查询 ZDXBNXB……”</td></tr>
+          <tr><td><code>ZDXBRWB</code></td><td>人文社会科学版</td><td>“请查询 ZDXBRWB……”</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="section" id="boundaries" aria-labelledby="boundaries-title">
+      <div class="section-head">
+        <p class="section-kicker">结果边界</p>
+        <div>
+          <h2 id="boundaries-title">正确理解结果，比得到结果更重要</h2>
+          <p class="section-intro">服务回答的是“本刊历史数据中有什么”，不是对现实世界全部学术活动的完整判断。</p>
+        </div>
+      </div>
+      <div class="boundary-grid">
+        <article class="boundary can">
+          <h3>可以支持</h3>
+          <ul>
+            <li>检索本刊收录论文并返回 DOI、作者和在线 URL</li>
+            <li>按明确口径统计发文、主题和贡献者</li>
+            <li>用共同论文证明作者或机构的共现关系</li>
+            <li>比较稿件内容与本刊历史主题的匹配程度</li>
+          </ul>
+        </article>
+        <article class="boundary cannot">
+          <h3>不能支持</h3>
+          <ul>
+            <li>投稿匹配不代表录用概率、审稿结果或学术质量</li>
+            <li>不能证明研究在全球范围内是否首次或绝对创新</li>
+            <li>共同署名不能证明导师、团队或组织隶属关系</li>
+            <li>没有检索结果不代表现实世界中不存在相关研究</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="help" aria-labelledby="help-title">
+      <div class="section-head">
+        <p class="section-kicker">排查问题</p>
+        <div>
+          <h2 id="help-title">连接失败时先看这里</h2>
+          <p class="section-intro">绝大多数问题来自地址、鉴权或客户端协议支持。不要在聊天窗口公开 Token。</p>
+        </div>
+      </div>
+      <div class="faq">
+        <details>
+          <summary>提示 401 Unauthorized</summary>
+          <p>服务已收到请求，但 Bearer Token 缺失或不正确。重新从管理员处获取 Token，确认前后没有空格，并把它填写到客户端的鉴权或 Secret 字段中。</p>
+        </details>
+        <details>
+          <summary>连接成功但看不到期刊工具</summary>
+          <p>确认客户端支持 Streamable HTTP MCP，然后断开并重新连接，让客户端重新执行初始化和工具发现。若客户端只支持本地 STDIO MCP，则不能直接连接此远程地址。</p>
+        </details>
+        <details>
+          <summary>智能体没有使用期刊服务</summary>
+          <p>在问题开头明确写“请使用关系期刊知识服务”，并提供期刊代码。检查当前会话是否允许该 MCP 工具；部分客户端会在首次调用时请求授权。</p>
+        </details>
+        <details>
+          <summary>语义检索返回 partial 或暂时不可用</summary>
+          <p>这通常表示语义服务降级。仍可改用明确的年份、主题、作者、机构或 DOI 条件执行结构化检索；回答中应保留降级说明。</p>
+        </details>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <span>关系期刊知识服务 · 只读业务语义 MCP</span>
+    <span>服务状态：<a href="/health">/health</a> · MCP 地址：<a href="/mcp">/mcp</a></span>
+  </footer>
+
+  <script>
+    document.querySelectorAll("[data-copy]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const target = document.getElementById(button.dataset.copy);
+        if (!target) return;
+        const text = target.innerText.replace("⧉", "").trim();
+        try {
+          await navigator.clipboard.writeText(text);
+          const original = button.textContent;
+          button.textContent = "已复制";
+          window.setTimeout(() => { button.textContent = original; }, 1400);
+        } catch (_) {
+          window.prompt("请复制以下内容", text);
+        }
+      });
+    });
+  </script>
+</body>
+</html>

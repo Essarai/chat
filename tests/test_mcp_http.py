@@ -25,6 +25,21 @@ class MCPHTTPTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["ok"], True)
+        self.assertEqual(response.json()["guide"], "/guide")
+
+    def test_guide_is_public_and_contains_both_user_manuals(self):
+        with TestClient(self._app()) as client:
+            response = client.get("/guide")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/html", response.headers["content-type"])
+        self.assertIn("frame-ancestors 'none'", response.headers["content-security-policy"])
+        self.assertIn("作者使用手册", response.text)
+        self.assertIn("编辑使用手册", response.text)
+        self.assertIn("https://journals.up.railway.app/mcp", response.text)
+        self.assertIn("ZDXBNXB", response.text)
+        self.assertIn("ZDXBRWB", response.text)
+        self.assertIn("不代表录用概率", response.text)
 
     def test_mcp_endpoint_rejects_missing_or_wrong_token(self):
         with TestClient(self._app()) as client:
