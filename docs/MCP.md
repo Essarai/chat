@@ -52,10 +52,53 @@ Streamable HTTP（供远程 Agent 或后续插件连接）：
 
 ```bash
 MCP_TRANSPORT=streamable-http MCP_HOST=127.0.0.1 MCP_PORT=8090 \
+MCP_BEARER_TOKEN=replace-with-a-long-random-secret \
   .venv/bin/python -m app.mcp_server
 ```
 
-默认地址是 `http://127.0.0.1:8090/mcp`。若部署到公网，必须在反向代理或 MCP 层增加 Bearer Token/OAuth；当前 MVP 服务本身不实现公网认证。
+默认地址是 `http://127.0.0.1:8090/mcp`，健康检查是 `/health`。Streamable HTTP 默认要求 `MCP_BEARER_TOKEN`，缺失时服务拒绝启动；只有本地临时调试可以设置 `MCP_ALLOW_INSECURE_HTTP=true`。
+
+## Railway 部署
+
+仓库保留原 Web 服务的 `Dockerfile` 和 `railway.toml`，MCP 使用独立的 `Dockerfile.mcp` 与 `railway.mcp.toml`。建议在同一个 Railway Project 中创建一个新的 Service，并完成以下设置：
+
+1. Source 选择 GitHub 仓库 `Essarai/chat` 的 `mcp` 分支。
+2. Service Settings 的 Config File Path 设为 `/railway.mcp.toml`。该文件会选择 `Dockerfile.mcp`，并用 `/health` 做部署健康检查。
+3. 在 Variables 中至少设置 `MCP_BEARER_TOKEN`；其余变量按 `mcp.env.example` 配置。可以用 `openssl rand -hex 32` 生成 token，不要提交真实值。
+4. 在 Settings → Networking 中 Generate Domain。远程 MCP URL 为 `https://<railway-domain>/mcp`。
+
+结构化查询使用镜像内置 SQLite，可以先独立验收。语义检索/投稿匹配还需要 MiniMax 与 Chroma 变量；合作图谱能力需要 Neo4j 变量。
+
+部署后验证：
+
+```bash
+curl https://<railway-domain>/health
+curl -i https://<railway-domain>/mcp
+```
+
+第一条应返回 HTTP 200；第二条未携带 token，应返回 HTTP 401。
+
+## Codex 远程连接
+
+把 token 只放在本机环境变量中：
+
+```bash
+export JOURNAL_MCP_TOKEN='<same-token-as-railway>'
+```
+
+在 Codex 配置中添加：
+
+```toml
+[mcp_servers.journal_knowledge_remote]
+url = "https://<railway-domain>/mcp"
+bearer_token_env_var = "JOURNAL_MCP_TOKEN"
+startup_timeout_sec = 20
+tool_timeout_sec = 90
+required = false
+default_tools_approval_mode = "writes"
+```
+
+重新启动 Codex 后用 `/mcp` 检查连接，也可以直接让 Codex 回答期刊关系、趋势、作者画像和投稿匹配问题。MVP 的静态 Bearer Token 适合单个受控 Agent；如果未来开放给多用户，应升级为 OAuth、独立用户身份与审计。
 
 ## 示例编排
 
@@ -81,7 +124,8 @@ aggregate_publications
 ## 测试
 
 ```bash
-.venv/bin/python -m unittest tests.test_mcp_service tests.test_mcp_protocol
+.venv/bin/python -m unittest \
+  tests.test_mcp_service tests.test_mcp_protocol tests.test_mcp_http
 ```
 
 测试使用真实 SQLite 语料和本地语义检索桩，不访问 Chroma 或 Neo4j 网络服务。

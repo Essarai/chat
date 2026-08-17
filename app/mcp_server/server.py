@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import hmac
+import json
 import os
-from typing import Literal, Optional
+from typing import Awaitable, Callable, Literal, Optional
 
 from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.types import Receive, Scope, Send
 
 from app.config import DEFAULT_JOURNAL_ID
 from app.mcp_server.contracts import (
@@ -26,6 +31,75 @@ READ_ONLY = ToolAnnotations(
     idempotent_hint=True,
     open_world_hint=False,
 )
+
+
+class StaticBearerAuthMiddleware:
+    """Protect the MCP endpoint with one deployment secret.
+
+    This intentionally implements static bearer-token authentication rather
+    than an OAuth authorization flow. It is suitable for the MVP's
+    server-to-server Codex connection and can later be replaced by OAuth
+    without changing the business tools.
+    """
+
+    def __init__(
+        self,
+        app: Callable[[Scope, Receive, Send], Awaitable[None]],
+        *,
+        token: Optional[str],
+        protected_path: str,
+        allow_insecure: bool = False,
+    ) -> None:
+        if not token and not allow_insecure:
+            raise RuntimeError(
+                "MCP_BEARER_TOKEN is required for Streamable HTTP. "
+                "Set MCP_ALLOW_INSECURE_HTTP=true only for local development."
+            )
+        self.app = app
+        self.token = token
+        self.protected_path = protected_path.rstrip("/") or "/"
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        path = scope.get("path", "")
+        is_protected = path == self.protected_path or path.startswith(
+            f"{self.protected_path}/"
+        )
+        if scope["type"] == "http" and is_protected and self.token:
+            authorization = ""
+            for name, value in scope.get("headers", []):
+                if name.lower() == b"authorization":
+                    authorization = value.decode("latin-1")
+                    break
+            expected = f"Bearer {self.token}"
+            if not hmac.compare_digest(authorization, expected):
+                body = json.dumps(
+                    {
+                        "error": "invalid_token",
+                        "error_description": "A valid Bearer token is required",
+                    }
+                ).encode("utf-8")
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 401,
+                        "headers": [
+                            (b"content-type", b"application/json"),
+                            (b"content-length", str(len(body)).encode("ascii")),
+                            (b"www-authenticate", b"Bearer"),
+                            (b"cache-control", b"no-store"),
+                        ],
+                    }
+                )
+                await send({"type": "http.response.body", "body": body})
+                return
+        await self.app(scope, receive, send)
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def build_server(service: Optional[JournalMCPService] = None) -> MCPServer:
@@ -237,18 +311,60 @@ def build_server(service: Optional[JournalMCPService] = None) -> MCPServer:
     return mcp
 
 
+def create_http_app(
+    server: Optional[MCPServer] = None,
+    *,
+    bearer_token: Optional[str] = None,
+    allow_insecure: bool = False,
+    host: str = "127.0.0.1",
+    mcp_path: str = "/mcp",
+) -> StaticBearerAuthMiddleware:
+    """Create the authenticated Streamable HTTP ASGI application."""
+    if not mcp_path.startswith("/"):
+        raise ValueError("MCP_PATH must start with '/'")
+
+    mcp = server or build_server()
+
+    @mcp.custom_route("/health", methods=["GET"], include_in_schema=False)
+    async def health_check(_request: Request) -> JSONResponse:
+        return JSONResponse(
+            {
+                "ok": True,
+                "service": "journal-knowledge-service",
+                "transport": "streamable-http",
+            }
+        )
+
+    app = mcp.streamable_http_app(
+        streamable_http_path=mcp_path,
+        stateless_http=True,
+        json_response=True,
+        host=host,
+    )
+    return StaticBearerAuthMiddleware(
+        app,
+        token=bearer_token,
+        protected_path=mcp_path,
+        allow_insecure=allow_insecure,
+    )
+
+
 def main() -> None:
     transport = os.getenv("MCP_TRANSPORT", "stdio").strip().lower()
     server = build_server()
     if transport == "streamable-http":
-        server.run(
-            "streamable-http",
-            host=os.getenv("MCP_HOST", "127.0.0.1"),
-            port=int(os.getenv("MCP_PORT", "8090")),
-            streamable_http_path=os.getenv("MCP_PATH", "/mcp"),
-            stateless_http=True,
-            json_response=True,
+        import uvicorn
+
+        host = os.getenv("MCP_HOST", "127.0.0.1")
+        port = int(os.getenv("PORT", os.getenv("MCP_PORT", "8090")))
+        app = create_http_app(
+            server,
+            bearer_token=os.getenv("MCP_BEARER_TOKEN"),
+            allow_insecure=_env_flag("MCP_ALLOW_INSECURE_HTTP"),
+            host=host,
+            mcp_path=os.getenv("MCP_PATH", "/mcp"),
         )
+        uvicorn.run(app, host=host, port=port)
         return
     if transport != "stdio":
         raise ValueError("MCP_TRANSPORT must be 'stdio' or 'streamable-http'")

@@ -1,0 +1,24 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    MCP_TRANSPORT=streamable-http \
+    MCP_HOST=0.0.0.0 \
+    MCP_PATH=/mcp \
+    SQLITE_PATH=/app/data/journal.db \
+    SQLITE_PATH_RWB=/app/data/journal_rwb.db
+
+COPY requirements.txt requirements-mcp.txt ./
+RUN pip install --no-cache-dir -r requirements-mcp.txt
+
+COPY app ./app
+COPY data/journal.db ./data/journal.db
+COPY data/journal_rwb.db ./data/journal_rwb.db
+
+EXPOSE 8090
+
+# Railway injects PORT. The HTTP entry point refuses to start without
+# MCP_BEARER_TOKEN, keeping an accidentally public deployment fail-closed.
+CMD ["python", "-m", "app.mcp_server"]
