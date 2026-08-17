@@ -124,7 +124,7 @@ def build_server(service: Optional[JournalMCPService] = None) -> MCPServer:
 
     @mcp.tool(
         title="解析学术实体",
-        description="将作者、机构、论文或主题名称解析为本刊数据中的稳定实体候选。存在同名或模糊输入时先调用；不要把第一个模糊候选直接当作唯一实体。",
+        description="将作者、机构、论文或主题名称解析为本刊数据中的业务候选。作者候选的 identifier 是姓名，不返回或使用数据库内部作者 ID；存在同名或模糊输入时不要把第一个候选直接当作唯一实体。",
         annotations=READ_ONLY,
     )
     def resolve_academic_entity(
@@ -236,7 +236,7 @@ def build_server(service: Optional[JournalMCPService] = None) -> MCPServer:
 
     @mcp.tool(
         title="获取作者或机构画像",
-        description="获取作者或机构在本刊中的论文、主题和年度活动画像。先用 resolve_academic_entity 消除同名歧义；画像范围仅代表本刊数据。",
+        description="获取作者或机构在本刊中的论文、主题和年度活动画像。作者 identifier 应使用 resolve_academic_entity 返回的姓名 identifier，不使用内部作者 ID；画像范围仅代表本刊数据。",
         annotations=READ_ONLY,
     )
     def get_contributor_profile(
@@ -252,7 +252,7 @@ def build_server(service: Optional[JournalMCPService] = None) -> MCPServer:
 
     @mcp.tool(
         title="获取合作网络",
-        description="查询作者、机构或主题范围内的合作节点和边，并返回共同论文证据。不要把同现关系解释为导师、团队归属或现实组织关系。",
+        description="查询作者、机构或主题范围内的合作节点和边，并返回共同论文证据。作者 identifier 使用姓名，不使用内部作者 ID；不要把同现关系解释为导师、团队归属或现实组织关系。",
         annotations=READ_ONLY,
     )
     def get_collaboration_network(

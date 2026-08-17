@@ -397,7 +397,20 @@ class JournalMCPService:
         candidates: List[Dict[str, Any]] = []
         with repo._conn() as conn:
             if entity_type == "author":
-                candidates = repo.search_authors_by_name(value, min(max(limit, 1), 30))
+                authors = repo.search_authors_by_name(
+                    value, min(max(limit, 1), 30)
+                )
+                candidates = [
+                    {
+                        "identifier": row.get("name_zh") or row.get("name_en"),
+                        "name_zh": row.get("name_zh"),
+                        "name_en": row.get("name_en"),
+                        "paper_count": row.get("paper_count"),
+                        "email": row.get("email"),
+                    }
+                    for row in authors
+                    if row.get("name_zh") or row.get("name_en")
+                ]
             elif entity_type == "institution":
                 candidates = repo._rows(
                     conn.execute(
@@ -437,7 +450,8 @@ class JournalMCPService:
                 )
         for row in candidates:
             label = str(
-                row.get("name_zh")
+                row.get("identifier")
+                or row.get("name_zh")
                 or row.get("name")
                 or row.get("title_zh")
                 or row.get("topic")
@@ -453,7 +467,7 @@ class JournalMCPService:
                 evidence_type="entity",
                 source="sqlite",
                 ref_id=str(
-                    row.get("author_id")
+                    row.get("identifier")
                     or row.get("institution_id")
                     or row.get("doi")
                     or row.get("topic")
@@ -1110,17 +1124,16 @@ class JournalMCPService:
                 missing_inputs=["identifier"],
             )
         if entity_type == "author":
-            with repo._conn() as conn:
-                row = conn.execute(
-                    "SELECT name_zh,name_en FROM authors WHERE author_id=?", (value,)
-                ).fetchone()
-            name = (row[0] or row[1]) if row else value
-            data = repo.author_profile(str(name))
+            # Author names are the public business identifier. Database author
+            # IDs remain an internal implementation detail and are not accepted
+            # as tool-chain inputs.
+            name = value
+            data = repo.author_profile(name)
             author_scope = PublicationScope(
                 journal_id=journal_id,
                 year_start=year_start,
                 year_end=year_end,
-                author=str(name),
+                author=name,
             )
             papers, total = self._search_rows(repo, author_scope, limit=100, offset=0)
             yearly = self.aggregate_publications(author_scope, "year", limit=200)

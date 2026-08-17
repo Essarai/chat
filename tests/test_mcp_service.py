@@ -140,6 +140,30 @@ class JournalMCPServiceTests(unittest.TestCase):
         self.assertEqual(network.status, "complete")
         self.assertTrue(network.evidence_refs)
 
+    def test_resolved_author_name_chains_to_profile_and_network(self):
+        resolved = self.service.resolve_academic_entity(
+            "author", "徐开达", "ZDXBNXB", limit=5
+        )
+        self.assertEqual(resolved.status, "complete")
+        candidate = resolved.data["candidates"][0]
+        self.assertEqual(candidate["identifier"], "徐开达")
+        self.assertNotIn("author_id", candidate)
+        self.assertEqual(resolved.evidence_refs[0].ref_id, "徐开达")
+
+        profile = self.service.get_contributor_profile(
+            "author", candidate["identifier"], "ZDXBNXB"
+        )
+        self.assertEqual(profile.status, "complete")
+
+        network = self.service.get_collaboration_network(
+            "author",
+            "ZDXBNXB",
+            identifier=candidate["identifier"],
+            limit=5,
+        )
+        self.assertEqual(network.status, "complete")
+        self.assertTrue(network.data["network"]["collaborators"])
+
     def test_fit_and_recommendation_preserve_business_boundary(self):
         fit = self.service.assess_research_fit(
             self.research, "ZDXBNXB", 2015, 2024
