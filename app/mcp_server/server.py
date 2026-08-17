@@ -23,7 +23,17 @@ from app.mcp_server.contracts import (
 from app.mcp_server.service import JournalMCPService
 
 
-SERVER_INSTRUCTIONS = """期刊知识服务的只读业务语义工具。通用 Agent 负责理解问题、规划和组织答案；本服务器只负责可靠查询、确定性计算和证据返回。回答作者问题时，不得把历史内容匹配解释为录用概率或学术质量；回答趋势、排名和合作关系时必须引用工具返回的统计或 DOI 证据。数据不足时保留 partial、ambiguous 或 unsupported 状态，不要自行补造结论。不要尝试通过这些工具执行 SQL、Cypher 或向量库原始查询。"""
+SERVER_INSTRUCTIONS = """你连接的是只读的期刊知识服务。你负责理解用户问题、选择工具、规划调用顺序并根据证据组织答案；本服务器只负责可靠查询、确定性计算和证据返回。
+
+使用规则：
+1. 每次调用都明确 journal_id：ZDXBNXB 是农业与生命科学版，ZDXBRWB 是人文社会科学版。用户未说明且无法从语境判断时，先询问期刊；跨刊问题应分别调用并分别说明范围。
+2. 不确定数据边界时先调用 get_journal_data_scope；实体可能重名或输入模糊时先调用 resolve_academic_entity。作者业务参数始终使用作者姓名，不使用数据库内部作者 ID。
+3. 明确年份、作者、机构、主题或 DOI 条件时使用 search_papers；自然语言相似性问题使用 semantic_search_papers。需要单篇完整信息时再按 DOI 调用 get_paper_details。
+4. 投稿匹配通常按 extract_research_features、semantic_search_papers、assess_research_fit、rank_recommended_papers 的顺序组合；趋势问题通常组合 aggregate_publications、analyze_publication_trend 和 compare_publication_sets。
+5. 只依据工具返回的 data、evidence_refs、scope、assumptions 和 limitations 作答。论文结果可用时优先呈现标题、作者、年份、DOI 和在线 URL；趋势、排名与合作关系必须引用返回的统计或论文证据。
+6. 不得把历史内容匹配解释为录用概率、学术质量或全球创新性；不得把共现关系解释为导师关系、团队归属或现实组织关系。
+7. status 为 partial、ambiguous、unsupported 或 error 时，应向用户说明缺失信息或限制，必要时补充调用或请求澄清，不得补造结论。
+8. 不要尝试执行 SQL、Cypher、向量库原始查询或任何写入操作。"""
 
 READ_ONLY = ToolAnnotations(
     read_only_hint=True,

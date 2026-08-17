@@ -51,3 +51,48 @@ python3 -m uvicorn app.api.main:app --host 0.0.0.0 --port 8080
 ### 注意
 
 默认向量库为 Chroma Cloud。若改用自建 Chroma（`CHROMA_TARGET=http`），Railway 出口需能访问该主机；Neo4j 同理。
+
+## 远程 MCP 与通用 Agent
+
+本项目把期刊数据查询封装为 14 个只读业务语义工具。通用 Agent 负责理解问题、规划工具调用和组织最终答案，不需要访问 SQLite、Chroma 或 Neo4j 的原始查询接口。
+
+已部署的 Streamable HTTP MCP：
+
+```text
+https://journals.up.railway.app/mcp
+```
+
+连接时使用请求头 `Authorization: Bearer <MCP_BEARER_TOKEN>`。Token 应保存在 Agent 平台的环境变量或 Secret Manager 中，不要写入提示词或提交到 Git。
+
+通用配置示例：
+
+```json
+{
+  "mcpServers": {
+    "journals": {
+      "type": "streamable-http",
+      "url": "https://journals.up.railway.app/mcp",
+      "headers": {
+        "Authorization": "Bearer ${JOURNAL_MCP_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+Codex 可以在 `~/.codex/config.toml` 或项目 `.codex/config.toml` 中配置：
+
+```toml
+[mcp_servers.journals]
+url = "https://journals.up.railway.app/mcp"
+bearer_token_env_var = "JOURNAL_MCP_TOKEN"
+startup_timeout_sec = 20
+tool_timeout_sec = 90
+required = false
+default_tools_approval_mode = "writes"
+```
+
+设置 `JOURNAL_MCP_TOKEN` 并重启 Agent 后，客户端会自动发现工具。Codex 中可使用 `/mcp` 检查连接状态。
+
+- Agent 的业务调用规则与典型编排：[AGENT_GUIDE.md](AGENT_GUIDE.md)
+- 工具、部署与测试的完整技术说明：[docs/MCP.md](docs/MCP.md)
