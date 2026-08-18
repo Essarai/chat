@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="关系期刊知识服务 MCP 的作者与编辑使用手册。">
+  <meta name="description" content="期刊知识服务 MCP 的作者与编辑使用手册。">
   <meta name="theme-color" content="#123c4a">
-  <title>关系期刊知识服务｜作者与编辑使用手册</title>
+  <title>期刊知识服务｜作者与编辑使用手册</title>
   <style>
     :root {
       --ink: #142d36;
@@ -261,6 +261,57 @@
     }
 
     .section-intro { max-width: 720px; margin: 0; color: var(--ink-soft); }
+
+    .demo-frame {
+      padding: 12px;
+      border: 1px solid var(--line);
+      background: var(--ink);
+      box-shadow: 12px 12px 0 rgba(14, 113, 107, .08);
+    }
+
+    .demo-player { position: relative; }
+
+    .demo-video {
+      display: block;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      background: #071a20;
+      object-fit: contain;
+    }
+
+    .demo-play-button {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      min-width: 148px;
+      min-height: 52px;
+      padding: 12px 20px;
+      transform: translate(-50%, -50%);
+      border: 1px solid rgba(255, 255, 255, .72);
+      background: rgba(7, 81, 79, .94);
+      color: var(--white);
+      font: 700 15px var(--body);
+      cursor: pointer;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, .28);
+    }
+
+    .demo-play-button:hover { background: var(--signal); }
+
+    .demo-play-button[hidden] { display: none; }
+
+    .demo-play-icon {
+      display: inline-block;
+      margin-right: 8px;
+      font-size: 13px;
+    }
+
+    .demo-caption {
+      margin: 18px 0 0;
+      color: var(--ink-soft);
+      font-size: 14px;
+    }
+
+    .demo-caption a { color: var(--jade-dark); font-weight: 700; }
 
     .steps {
       display: grid;
@@ -525,9 +576,10 @@
     <div class="topbar-inner">
       <a class="brand" href="#top" aria-label="返回使用手册顶部">
         <span class="brand-mark" aria-hidden="true"></span>
-        <span>关系期刊知识服务</span>
+        <span>期刊知识服务</span>
       </a>
       <nav class="nav" aria-label="页面导航">
+        <a href="#demo">演示视频</a>
         <a href="#connect">开始连接</a>
         <a href="#author">作者手册</a>
         <a href="#editor">编辑手册</a>
@@ -557,6 +609,27 @@
       </aside>
     </section>
 
+    <section class="section" id="demo" aria-labelledby="demo-title">
+      <div class="section-head">
+        <p class="section-kicker">使用演示</p>
+        <div>
+          <h2 id="demo-title">看看智能体如何调用期刊工具</h2>
+          <p class="section-intro">播放完整演示，了解连接后的提问与查询过程。播放器支持暂停、全屏和拖动时间轴。</p>
+        </div>
+      </div>
+      <div class="demo-frame">
+        <div class="demo-player">
+          <video class="demo-video" controls playsinline preload="none" poster="guide-demo-poster.jpg" data-src="guide-demo.mp4" aria-label="期刊知识服务使用演示">
+          你的浏览器暂不支持视频播放，请使用下方链接打开视频。
+          </video>
+          <button class="demo-play-button" type="button" id="demo-play">
+            <span class="demo-play-icon" aria-hidden="true">▶</span>播放演示
+          </button>
+        </div>
+      </div>
+      <p class="demo-caption">点击播放后才会加载视频。如果无法在页面中播放，可以<a href="guide-demo.mp4">直接打开演示视频</a>。</p>
+    </section>
+
     <section class="section" id="connect" aria-labelledby="connect-title">
       <div class="section-head">
         <p class="section-kicker">开始连接</p>
@@ -570,7 +643,7 @@
         <article class="step">
           <span class="step-num">STEP 01</span>
           <h3>添加远程 MCP</h3>
-          <p>新建一个名为“关系期刊知识服务”的 Streamable HTTP MCP。</p>
+          <p>新建一个名为“期刊知识服务”的 Streamable HTTP MCP。</p>
         </article>
         <article class="step">
           <span class="step-num">STEP 02</span>
@@ -586,7 +659,7 @@
 
       <div class="config-panel">
         <div class="config-fields" aria-label="连接字段">
-          <div class="field-row"><span>名称</span><code>关系期刊知识服务</code></div>
+          <div class="field-row"><span>名称</span><code>期刊知识服务</code></div>
           <div class="field-row"><span>传输方式</span><code>Streamable HTTP</code></div>
           <div class="field-row"><span>服务地址</span><code>https://journals.up.railway.app/mcp</code></div>
           <div class="field-row"><span>鉴权方式</span><code>Bearer Token</code></div>
@@ -620,7 +693,7 @@
           <span class="use-tag">投稿内容匹配</span>
           <h3>判断研究是否贴近期刊历史内容</h3>
           <p>获得匹配强弱、相近主题和代表论文，但不把结果当作录用预测。</p>
-          <blockquote class="prompt" id="author-prompt-1">请使用关系期刊知识服务，评估以下研究与 ZDXBNXB 历史内容的匹配程度，并用相似论文解释原因。标题：……；摘要：……；关键词：……<button class="mini-copy" type="button" data-copy="author-prompt-1" aria-label="复制示例问题">⧉</button></blockquote>
+          <blockquote class="prompt" id="author-prompt-1">请使用期刊知识服务，评估以下研究与 ZDXBNXB 历史内容的匹配程度，并用相似论文解释原因。标题：……；摘要：……；关键词：……<button class="mini-copy" type="button" data-copy="author-prompt-1" aria-label="复制示例问题">⧉</button></blockquote>
         </article>
         <article class="use-card">
           <span class="use-tag">查找相似论文</span>
@@ -737,7 +810,7 @@
         </details>
         <details>
           <summary>智能体没有使用期刊服务</summary>
-          <p>在问题开头明确写“请使用关系期刊知识服务”，并提供期刊代码。检查当前会话是否允许该 MCP 工具；部分客户端会在首次调用时请求授权。</p>
+          <p>在问题开头明确写“请使用期刊知识服务”，并提供期刊代码。检查当前会话是否允许该 MCP 工具；部分客户端会在首次调用时请求授权。</p>
         </details>
         <details>
           <summary>语义检索返回 partial 或暂时不可用</summary>
@@ -748,11 +821,33 @@
   </main>
 
   <footer>
-    <span>关系期刊知识服务 · 只读业务语义 MCP</span>
+    <span>期刊知识服务 · 只读业务语义 MCP</span>
     <span>服务状态：<a href="/health">/health</a> · MCP 地址：<a href="/mcp">/mcp</a></span>
   </footer>
 
   <script>
+    const demoVideo = document.querySelector(".demo-video");
+    const demoPlayButton = document.getElementById("demo-play");
+
+    if (demoVideo && demoPlayButton) {
+      demoPlayButton.addEventListener("click", async () => {
+        if (!demoVideo.hasAttribute("src")) {
+          demoVideo.src = demoVideo.dataset.src;
+          demoVideo.load();
+        }
+        demoPlayButton.hidden = true;
+        try {
+          await demoVideo.play();
+        } catch (_) {
+          demoPlayButton.hidden = false;
+        }
+      });
+
+      demoVideo.addEventListener("error", () => {
+        demoPlayButton.hidden = false;
+      });
+    }
+
     document.querySelectorAll("[data-copy]").forEach((button) => {
       button.addEventListener("click", async () => {
         const target = document.getElementById(button.dataset.copy);

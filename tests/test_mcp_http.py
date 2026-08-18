@@ -25,21 +25,56 @@ class MCPHTTPTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["ok"], True)
-        self.assertEqual(response.json()["guide"], "/guide")
+        self.assertEqual(response.json()["guide"], "/")
 
     def test_guide_is_public_and_contains_both_user_manuals(self):
         with TestClient(self._app()) as client:
-            response = client.get("/guide")
+            response = client.get("/")
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("text/html", response.headers["content-type"])
         self.assertIn("frame-ancestors 'none'", response.headers["content-security-policy"])
+        self.assertIn("img-src 'self'", response.headers["content-security-policy"])
+        self.assertIn("media-src 'self'", response.headers["content-security-policy"])
+        self.assertIn("期刊知识服务", response.text)
+        self.assertNotIn("关系期刊知识服务", response.text)
+        self.assertIn('preload="none"', response.text)
+        self.assertIn('poster="guide-demo-poster.jpg"', response.text)
+        self.assertIn('data-src="guide-demo.mp4"', response.text)
+        self.assertNotIn("<source", response.text)
+        self.assertIn("播放演示", response.text)
         self.assertIn("作者使用手册", response.text)
         self.assertIn("编辑使用手册", response.text)
         self.assertIn("https://journals.up.railway.app/mcp", response.text)
         self.assertIn("ZDXBNXB", response.text)
         self.assertIn("ZDXBRWB", response.text)
         self.assertIn("不代表录用概率", response.text)
+
+    def test_legacy_guide_url_redirects_to_root(self):
+        with TestClient(self._app()) as client:
+            response = client.get("/guide", follow_redirects=False)
+
+        self.assertEqual(response.status_code, 308)
+        self.assertEqual(response.headers["location"], "/")
+
+    def test_guide_video_is_public_and_supports_range_requests(self):
+        with TestClient(self._app()) as client:
+            response = client.get(
+                "/guide-demo.mp4", headers={"Range": "bytes=0-1023"}
+            )
+
+        self.assertEqual(response.status_code, 206)
+        self.assertEqual(response.headers["content-type"], "video/mp4")
+        self.assertEqual(response.headers["accept-ranges"], "bytes")
+        self.assertEqual(len(response.content), 1024)
+
+    def test_guide_video_poster_is_public(self):
+        with TestClient(self._app()) as client:
+            response = client.get("/guide-demo-poster.jpg")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "image/jpeg")
+        self.assertLess(len(response.content), 300_000)
 
     def test_mcp_endpoint_rejects_missing_or_wrong_token(self):
         with TestClient(self._app()) as client:

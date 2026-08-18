@@ -9,7 +9,12 @@ from typing import Awaitable, Callable, Literal, Optional
 from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse
+from starlette.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+)
 from starlette.types import Receive, Scope, Send
 
 from app.config import DEFAULT_JOURNAL_ID
@@ -25,6 +30,8 @@ from app.mcp_server.service import JournalMCPService
 
 
 GUIDE_HTML = Path(__file__).with_name("guide.html").read_text(encoding="utf-8")
+GUIDE_DEMO_VIDEO = Path(__file__).with_name("guide-demo.mp4")
+GUIDE_DEMO_POSTER = Path(__file__).with_name("guide-demo-poster.jpg")
 
 SERVER_INSTRUCTIONS = """你连接的是只读的期刊知识服务。你负责理解用户问题、选择工具、规划调用顺序并根据证据组织答案；本服务器只负责可靠查询、确定性计算和证据返回。
 
@@ -37,7 +44,7 @@ SERVER_INSTRUCTIONS = """你连接的是只读的期刊知识服务。你负责�
 6. 不得把历史内容匹配解释为录用概率、学术质量或全球创新性；不得把共现关系解释为导师关系、团队归属或现实组织关系。
 7. status 为 partial、ambiguous、unsupported 或 error 时，应向用户说明缺失信息或限制，必要时补充调用或请求澄清，不得补造结论。
 8. 不要尝试执行 SQL、Cypher、向量库原始查询或任何写入操作。
-作者和编辑的公开使用手册位于当前服务的 /guide。用户询问连接方法、示例问题或结果边界时，可以引导其查看该页面。"""
+作者和编辑的公开使用手册位于当前服务的根路径 /。用户询问连接方法、示例问题或结果边界时，可以引导其查看该页面。"""
 
 READ_ONLY = ToolAnnotations(
     read_only_hint=True,
@@ -346,11 +353,11 @@ def create_http_app(
                 "ok": True,
                 "service": "journal-knowledge-service",
                 "transport": "streamable-http",
-                "guide": "/guide",
+                "guide": "/",
             }
         )
 
-    @mcp.custom_route("/guide", methods=["GET"], include_in_schema=False)
+    @mcp.custom_route("/", methods=["GET"], include_in_schema=False)
     async def public_guide(_request: Request) -> HTMLResponse:
         return HTMLResponse(
             GUIDE_HTML,
@@ -358,10 +365,43 @@ def create_http_app(
                 "Cache-Control": "public, max-age=300",
                 "Content-Security-Policy": (
                     "default-src 'none'; style-src 'unsafe-inline'; "
-                    "script-src 'unsafe-inline'; base-uri 'none'; "
-                    "frame-ancestors 'none'; form-action 'none'"
+                    "script-src 'unsafe-inline'; img-src 'self'; "
+                    "media-src 'self'; base-uri 'none'; frame-ancestors 'none'; "
+                    "form-action 'none'"
                 ),
                 "Referrer-Policy": "no-referrer",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    @mcp.custom_route("/guide", methods=["GET"], include_in_schema=False)
+    async def legacy_guide_redirect(_request: Request) -> RedirectResponse:
+        return RedirectResponse(url="/", status_code=308)
+
+    @mcp.custom_route(
+        "/guide-demo.mp4", methods=["GET", "HEAD"], include_in_schema=False
+    )
+    async def public_guide_demo(_request: Request) -> FileResponse:
+        return FileResponse(
+            GUIDE_DEMO_VIDEO,
+            media_type="video/mp4",
+            filename="journal-knowledge-service-demo.mp4",
+            content_disposition_type="inline",
+            headers={
+                "Cache-Control": "public, max-age=86400",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    @mcp.custom_route(
+        "/guide-demo-poster.jpg", methods=["GET", "HEAD"], include_in_schema=False
+    )
+    async def public_guide_demo_poster(_request: Request) -> FileResponse:
+        return FileResponse(
+            GUIDE_DEMO_POSTER,
+            media_type="image/jpeg",
+            headers={
+                "Cache-Control": "public, max-age=86400",
                 "X-Content-Type-Options": "nosniff",
             },
         )
