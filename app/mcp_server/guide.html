@@ -111,6 +111,34 @@
 
     .nav a:hover { border-color: var(--signal); color: var(--ink); }
 
+    .topbar-actions {
+      display: flex;
+      align-items: center;
+      gap: 24px;
+    }
+
+    .language-switch {
+      display: inline-flex;
+      padding: 3px;
+      border: 1px solid var(--line);
+      background: var(--white);
+    }
+
+    .language-switch button {
+      min-width: 42px;
+      padding: 5px 8px;
+      border: 0;
+      background: transparent;
+      color: var(--ink-soft);
+      cursor: pointer;
+      font: 700 12px var(--body);
+    }
+
+    .language-switch button[aria-pressed="true"] {
+      background: var(--jade-dark);
+      color: var(--white);
+    }
+
     main {
       width: min(var(--max), calc(100% - 40px));
       margin: 0 auto;
@@ -559,6 +587,7 @@
 
     @media (max-width: 900px) {
       .nav { display: none; }
+      .topbar-actions { gap: 0; }
       .hero { grid-template-columns: 1fr; gap: 44px; padding-top: 64px; }
       .hero-lead { font-size: 17px; }
       .evidence-spine { max-width: 560px; }
@@ -604,14 +633,20 @@
         <span class="brand-mark" aria-hidden="true"></span>
         <span>期刊知识服务</span>
       </a>
-      <nav class="nav" aria-label="页面导航">
-        <a href="#demo">演示视频</a>
-        <a href="#connect">开始连接</a>
-        <a href="#author">作者手册</a>
-        <a href="#editor">编辑手册</a>
-        <a href="#boundaries">结果边界</a>
-        <a href="#help">排查问题</a>
-      </nav>
+      <div class="topbar-actions">
+        <nav class="nav" aria-label="页面导航">
+          <a href="#demo">演示视频</a>
+          <a href="#connect">开始连接</a>
+          <a href="#author">作者手册</a>
+          <a href="#editor">编辑手册</a>
+          <a href="#boundaries">结果边界</a>
+          <a href="#help">排查问题</a>
+        </nav>
+        <div class="language-switch" role="group" aria-label="选择页面语言">
+          <button type="button" data-language="zh" aria-pressed="true">中文</button>
+          <button type="button" data-language="en" aria-pressed="false">EN</button>
+        </div>
+      </div>
     </div>
   </header>
 
@@ -709,34 +744,34 @@
       <div class="section-head">
         <p class="section-kicker">作者使用手册</p>
         <div>
-          <h2 id="author-title">从“适不适合”走到“证据是什么”</h2>
-          <p class="section-intro">告诉智能体目标期刊、研究主题和你希望解决的问题。稿件分析建议提供标题、摘要和关键词，而不是只给一个宽泛主题。</p>
+          <h2 id="author-title">先说清任务，再让证据回答</h2>
+          <p class="section-intro">先选择目标期刊和任务：投稿前判断内容匹配、查找文献、了解主题变化，或查看作者与机构。稿件匹配只需提供标题、摘要和关键词，并要求结论附论文证据与数据边界。</p>
         </div>
       </div>
 
       <div class="manual-grid">
         <article class="use-card">
-          <span class="use-tag">投稿内容匹配</span>
-          <h3>判断研究是否贴近期刊历史内容</h3>
-          <p>获得匹配强弱、相近主题和代表论文，但不把结果当作录用预测。</p>
-          <blockquote class="prompt" id="author-prompt-1">请使用期刊知识服务，评估以下研究与 ZDXBNXB 历史内容的匹配程度，并用相似论文解释原因。标题：……；摘要：……；关键词：……<button class="mini-copy" type="button" data-copy="author-prompt-1" aria-label="复制示例问题">⧉</button></blockquote>
+          <span class="use-tag">投稿前判断</span>
+          <h3>看内容匹配，不预测录用</h3>
+          <p>要求分别说明“匹配在哪里、差异在哪里、还应补查什么”，并用本刊历史论文支撑判断。</p>
+          <blockquote class="prompt" id="author-prompt-1">请使用期刊知识服务，评估以下研究与 ZDXBNXB 历史内容的匹配程度。请分别说明匹配点、差异点和建议补查的方向，列出支撑判断的相似论文；不要预测录用概率。标题：……；摘要：……；关键词：……<button class="mini-copy" type="button" data-copy="author-prompt-1" aria-label="复制示例问题">⧉</button></blockquote>
         </article>
         <article class="use-card">
           <span class="use-tag">查找相似论文</span>
-          <h3>为写作与投稿准备相关阅读</h3>
-          <p>可限定年份和阅读目标，并要求返回 DOI 与在线链接。</p>
-          <blockquote class="prompt" id="author-prompt-2">请在 ZDXBNXB 中查找与“水稻抗病机制”相近的论文，优先近十年，列出标题、作者、年份、DOI、在线链接和推荐理由。<button class="mini-copy" type="button" data-copy="author-prompt-2" aria-label="复制示例问题">⧉</button></blockquote>
+          <h3>把检索结果变成阅读清单</h3>
+          <p>说明研究问题、时间范围和阅读目的，让结果按相关性组织，并返回 DOI 与在线链接。</p>
+          <blockquote class="prompt" id="author-prompt-2">请在 ZDXBNXB 中查找近十年与“水稻抗病机制”相关的论文，按与研究问题的相关性排序。每篇列出标题、作者、年份、DOI、在线链接和推荐理由，并说明本次检索的数据范围。<button class="mini-copy" type="button" data-copy="author-prompt-2" aria-label="复制示例问题">⧉</button></blockquote>
         </article>
         <article class="use-card">
           <span class="use-tag">主题学习</span>
-          <h3>了解一个方向在本刊的发展</h3>
-          <p>查看年度变化、代表主题和论文证据，避免只看搜索结果数量下结论。</p>
-          <blockquote class="prompt" id="author-prompt-3">请分析 ZDXBRWB 中“数字经济”主题近十年的发文趋势，并列出趋势变化最明显阶段的代表论文。<button class="mini-copy" type="button" data-copy="author-prompt-3" aria-label="复制示例问题">⧉</button></blockquote>
+          <h3>理解主题如何变化</h3>
+          <p>要求分阶段解释年度变化、主题侧重和代表论文，不用单一检索数量代替趋势分析。</p>
+          <blockquote class="prompt" id="author-prompt-3">请分析 ZDXBRWB 中“数字经济”主题近十年的发展变化。请划分主要阶段，说明各阶段的发文数量、主题侧重和变化依据，并列出代表论文。<button class="mini-copy" type="button" data-copy="author-prompt-3" aria-label="复制示例问题">⧉</button></blockquote>
         </article>
         <article class="use-card">
           <span class="use-tag">作者与机构</span>
-          <h3>查看本刊范围内的研究画像</h3>
-          <p>同名时先确认候选；画像只代表作者或机构在本刊收录数据中的活动。</p>
+          <h3>先消歧，再看本刊研究画像</h3>
+          <p>遇到同名作者或相似机构名时先确认对象；画像只反映其在本刊收录数据中的活动。</p>
           <blockquote class="prompt" id="author-prompt-4">请在 ZDXBNXB 中解析作者“张三”，如果存在多个候选先让我确认；确认后总结其本刊论文、主题和合作关系，并附共同论文证据。<button class="mini-copy" type="button" data-copy="author-prompt-4" aria-label="复制示例问题">⧉</button></blockquote>
         </article>
       </div>
@@ -746,35 +781,35 @@
       <div class="section-head">
         <p class="section-kicker">编辑使用手册</p>
         <div>
-          <h2 id="editor-title">用统一口径观察选题、作者与结构变化</h2>
-          <p class="section-intro">编辑问题应明确期刊、时间范围、比较对象和排序依据。需要统计时，让智能体调用聚合和趋势工具，不要自行汇总展示列表。</p>
+          <h2 id="editor-title">先固定统计口径，再比较变化</h2>
+          <p class="section-intro">编辑问题应明确期刊、时间窗口、分析对象、比较维度和输出格式。要求智能体返回完整聚合结果、计算依据和代表论文，避免从有限展示列表中自行推断总体趋势。</p>
         </div>
       </div>
 
       <div class="manual-grid">
         <article class="use-card">
-          <span class="use-tag">选题趋势</span>
-          <h3>分析年度发文变化</h3>
-          <p>按统一公式返回年度序列、斜率和上升、稳定或下降判断。</p>
-          <blockquote class="prompt" id="editor-prompt-1">请分析 ZDXBNXB 2016—2025 年“生物育种”主题的发文趋势，说明统计口径，并提供年度数据和代表论文。<button class="mini-copy" type="button" data-copy="editor-prompt-1" aria-label="复制示例问题">⧉</button></blockquote>
+          <span class="use-tag">选题观察</span>
+          <h3>用年度序列识别变化</h3>
+          <p>先确认主题边界和时间窗口，再查看年度数量、变化方向、阶段拐点与论文证据。</p>
+          <blockquote class="prompt" id="editor-prompt-1">请分析 ZDXBNXB 2016—2025 年“生物育种”主题的发文变化。先说明主题与统计口径，再提供完整年度数据、阶段划分、变化依据和各阶段代表论文。<button class="mini-copy" type="button" data-copy="editor-prompt-1" aria-label="复制示例问题">⧉</button></blockquote>
         </article>
         <article class="use-card">
           <span class="use-tag">时期比较</span>
-          <h3>比较两个阶段的主题结构</h3>
-          <p>识别新增、消失、增强和减弱主题，并保留各阶段范围。</p>
-          <blockquote class="prompt" id="editor-prompt-2">比较 ZDXBRWB 2016—2020 年与 2021—2025 年的主题结构，列出增强、减弱、新增和消失主题及代表论文。<button class="mini-copy" type="button" data-copy="editor-prompt-2" aria-label="复制示例问题">⧉</button></blockquote>
+          <h3>用同一口径比较两个阶段</h3>
+          <p>固定主题识别方法和分母，区分增强、减弱、新增与暂未出现，并保留两阶段数据范围。</p>
+          <blockquote class="prompt" id="editor-prompt-2">请用同一统计口径比较 ZDXBRWB 2016—2020 年与 2021—2025 年的主题结构。列出增强、减弱、新增和暂未出现的主题，给出数量与占比变化，并附代表论文。<button class="mini-copy" type="button" data-copy="editor-prompt-2" aria-label="复制示例问题">⧉</button></blockquote>
         </article>
         <article class="use-card">
-          <span class="use-tag">贡献者分析</span>
-          <h3>按明确业务口径排序</h3>
-          <p>可以按发文量、持续性、主题覆盖或合作强度排序，但不能解释为学术质量排名。</p>
-          <blockquote class="prompt" id="editor-prompt-3">请按发文持续性排序 ZDXBNXB 近十年的作者，给出前十名、计算依据和每位作者的年度活动证据。<button class="mini-copy" type="button" data-copy="editor-prompt-3" aria-label="复制示例问题">⧉</button></blockquote>
+          <span class="use-tag">贡献者画像</span>
+          <h3>先定义“贡献”，再排序</h3>
+          <p>可按发文量、持续性、主题覆盖或合作活跃度观察，但不能把业务排序解释为学术质量排名。</p>
+          <blockquote class="prompt" id="editor-prompt-3">请按“近十年有发文的年份数”衡量持续性，对 ZDXBNXB 作者排序。给出前十名、并列处理方式、计算依据和每位作者的年度发文证据；不要解释为学术质量排名。<button class="mini-copy" type="button" data-copy="editor-prompt-3" aria-label="复制示例问题">⧉</button></blockquote>
         </article>
         <article class="use-card">
-          <span class="use-tag">合作结构</span>
-          <h3>查看共同署名网络</h3>
-          <p>通过共同论文查看作者或机构的连接，不能推断导师、团队或现实组织关系。</p>
-          <blockquote class="prompt" id="editor-prompt-4">请分析 ZDXBRWB 中“共同富裕”主题相关作者的合作网络，列出主要连接及支撑每条连接的共同论文。<button class="mini-copy" type="button" data-copy="editor-prompt-4" aria-label="复制示例问题">⧉</button></blockquote>
+          <span class="use-tag">合作网络</span>
+          <h3>用共同论文解释连接</h3>
+          <p>每条作者或机构连接都应回到共同论文；共同署名不能证明导师、团队或现实组织关系。</p>
+          <blockquote class="prompt" id="editor-prompt-4">请分析 ZDXBRWB 中“共同富裕”主题相关作者的共同署名网络。列出主要连接、合作次数和支撑每条连接的共同论文，并明确该结果不代表导师或组织关系。<button class="mini-copy" type="button" data-copy="editor-prompt-4" aria-label="复制示例问题">⧉</button></blockquote>
         </article>
       </div>
 
@@ -857,6 +892,206 @@
   </footer>
 
   <script>
+    const englishMarkup = {
+      ".brand > span:last-child": "Journal Knowledge Service",
+      ".nav a:nth-child(1)": "Demo",
+      ".nav a:nth-child(2)": "Connect",
+      ".nav a:nth-child(3)": "For Authors",
+      ".nav a:nth-child(4)": "For Editors",
+      ".nav a:nth-child(5)": "Boundaries",
+      ".nav a:nth-child(6)": "Troubleshooting",
+      ".eyebrow": "Evidence-first journal service · User guide",
+      "#hero-title": "Ask naturally. Ground every answer in journal evidence.",
+      ".hero-lead": "Connect the service to your AI client once, then search papers, examine topic trends, explore author and institution links, and receive answers with DOIs and online URLs.",
+      ".role-link.primary": "For authors <span aria-hidden=\"true\">→</span>",
+      ".role-link:not(.primary)": "For editors <span aria-hidden=\"true\">→</span>",
+      ".spine-label": "Evidence path for each question",
+      ".flow-step:nth-child(2) strong": "Describe a journal-related task",
+      ".flow-step:nth-child(3) strong": "The AI client selects tools",
+      ".flow-step:nth-child(4) strong": "MCP queries journal data",
+      ".flow-step:nth-child(5) strong": "Receive findings and paper evidence",
+      "#demo .section-kicker": "Product demo",
+      "#demo-title": "See how an AI client uses the journal tools",
+      "#demo .section-intro": "Watch the full walkthrough to understand the connection and query flow. You can pause, seek, or switch to full screen.",
+      "#demo-play": "<span class=\"demo-play-icon\" aria-hidden=\"true\">▶</span> Play demo",
+      ".demo-caption": "The video loads only after you press play. If it cannot play here, <a href=\"guide-demo.mp4\">open the demo video directly</a>.",
+      "#connect .section-kicker": "Connect",
+      "#connect-title": "Connect your AI client in three steps",
+      "#connect .section-intro": "Menu names vary by client and are often listed under Tools, Connectors, or MCP Servers. You only need the service URL and an access token from the administrator.",
+      ".step:nth-child(1) h3": "Add a remote MCP server",
+      ".step:nth-child(1) p": "Create a Streamable HTTP MCP connection named Journal Knowledge Service.",
+      ".step:nth-child(2) h3": "Enter the URL and token",
+      ".step:nth-child(2) p": "Paste the URL below and select Bearer Token authentication. Never place the token in a chat message.",
+      ".step:nth-child(3) h3": "Save and test",
+      ".step:nth-child(3) p": "Once the journal tools appear, ask questions in natural language. You do not need to memorize tool names.",
+      ".field-row:nth-child(1) span": "Name",
+      ".field-row:nth-child(1) code": "Journal Knowledge Service",
+      ".field-row:nth-child(2) span": "Transport",
+      ".field-row:nth-child(3) span": "Service URL",
+      ".field-row:nth-child(4) span": "Authentication",
+      ".field-row:nth-child(5) span": "Token",
+      ".field-row:nth-child(5) code": "Request it from the service administrator",
+      ".connection-copy p": "Copy the MCP URL. Store the token separately in your client's secret manager or an environment variable.",
+      "#connect .note": "<strong>Privacy:</strong> A title, abstract, and keywords are usually sufficient for manuscript-fit analysis. Do not upload identity documents, contact details, reviewer comments, or unrelated sensitive information. For unpublished manuscripts, also follow your AI client's privacy policy.",
+      "#author .section-kicker": "Guide for authors",
+      "#author-title": "Define the task first, then let evidence answer",
+      "#author .section-intro": "Choose a target journal and a task: assess content fit before submission, find literature, understand topic change, or examine authors and institutions. For fit analysis, provide only the title, abstract, and keywords, and request paper evidence and data boundaries.",
+      "#author .use-card:nth-child(1) .use-tag": "Before submission",
+      "#author .use-card:nth-child(1) h3": "Assess content fit, not acceptance",
+      "#author .use-card:nth-child(1) p": "Ask where the work aligns, where it differs, and what to investigate next, with historical journal papers supporting each judgment.",
+      "#author .use-card:nth-child(2) .use-tag": "Find related papers",
+      "#author .use-card:nth-child(2) h3": "Turn search results into a reading list",
+      "#author .use-card:nth-child(2) p": "State the research question, date range, and reading goal. Ask for relevance-based organization, DOIs, and online URLs.",
+      "#author .use-card:nth-child(3) .use-tag": "Learn a topic",
+      "#author .use-card:nth-child(3) h3": "Understand how a topic changed",
+      "#author .use-card:nth-child(3) p": "Request period-by-period explanations, shifts in emphasis, and representative papers instead of treating a search-result count as a trend.",
+      "#author .use-card:nth-child(4) .use-tag": "Authors and institutions",
+      "#author .use-card:nth-child(4) h3": "Resolve the entity before building a profile",
+      "#author .use-card:nth-child(4) p": "Confirm the correct person or institution when names are ambiguous. A profile reflects only activity in this journal's indexed data.",
+      "#editor .section-kicker": "Guide for editors",
+      "#editor-title": "Fix the measurement definition before comparing change",
+      "#editor .section-intro": "Specify the journal, time window, subject, comparison dimension, and output format. Request complete aggregates, calculation rules, and representative papers rather than inferring the whole picture from a limited display list.",
+      "#editor .use-card:nth-child(1) .use-tag": "Topic monitoring",
+      "#editor .use-card:nth-child(1) h3": "Use yearly series to identify change",
+      "#editor .use-card:nth-child(1) p": "Define the topic and time window first, then inspect annual counts, direction, turning points, and paper evidence.",
+      "#editor .use-card:nth-child(2) .use-tag": "Period comparison",
+      "#editor .use-card:nth-child(2) h3": "Compare two periods on one definition",
+      "#editor .use-card:nth-child(2) p": "Keep topic detection and denominators fixed. Separate stronger, weaker, newly observed, and not-observed topics while preserving each period's scope.",
+      "#editor .use-card:nth-child(3) .use-tag": "Contributor profiles",
+      "#editor .use-card:nth-child(3) h3": "Define contribution before ranking",
+      "#editor .use-card:nth-child(3) p": "Explore output, continuity, topic coverage, or collaboration activity, but never present an operational ranking as academic quality.",
+      "#editor .use-card:nth-child(4) .use-tag": "Collaboration networks",
+      "#editor .use-card:nth-child(4) h3": "Explain every link with coauthored papers",
+      "#editor .use-card:nth-child(4) p": "Trace author or institution links back to shared papers. Coauthorship does not prove supervision, team membership, or organizational affiliation.",
+      ".journal-table th:nth-child(1)": "Journal code",
+      ".journal-table th:nth-child(2)": "Scope",
+      ".journal-table th:nth-child(3)": "How to refer to it",
+      ".journal-table tbody tr:nth-child(1) td:nth-child(2)": "Agriculture and Life Sciences",
+      ".journal-table tbody tr:nth-child(1) td:nth-child(3)": "“Search ZDXBNXB for…”",
+      ".journal-table tbody tr:nth-child(2) td:nth-child(2)": "Humanities and Social Sciences",
+      ".journal-table tbody tr:nth-child(2) td:nth-child(3)": "“Search ZDXBRWB for…”",
+      "#boundaries .section-kicker": "Interpretation boundaries",
+      "#boundaries-title": "Interpreting the result matters as much as obtaining it",
+      "#boundaries .section-intro": "The service reports what appears in the journal's historical data. It is not a complete judgment about all academic activity in the real world.",
+      ".boundary.can h3": "Supported",
+      ".boundary.can li:nth-child(1)": "Search indexed papers and return DOIs, authors, and online URLs",
+      ".boundary.can li:nth-child(2)": "Aggregate publications, topics, and contributors using explicit definitions",
+      ".boundary.can li:nth-child(3)": "Support author or institution co-occurrence with shared papers",
+      ".boundary.can li:nth-child(4)": "Compare manuscript content with the journal's historical topics",
+      ".boundary.cannot h3": "Not supported",
+      ".boundary.cannot li:nth-child(1)": "Content fit is not an acceptance probability, review outcome, or quality score",
+      ".boundary.cannot li:nth-child(2)": "The service cannot prove global novelty or absolute originality",
+      ".boundary.cannot li:nth-child(3)": "Coauthorship does not prove supervision, team, or organizational relationships",
+      ".boundary.cannot li:nth-child(4)": "No result does not mean the research does not exist outside the indexed data",
+      "#help .section-kicker": "Troubleshooting",
+      "#help-title": "Check these items when connection fails",
+      "#help .section-intro": "Most failures involve the URL, authentication, or protocol support in the client. Never expose a token in a chat window.",
+      ".faq details:nth-child(1) summary": "401 Unauthorized",
+      ".faq details:nth-child(1) p": "The service received the request, but the Bearer token is missing or incorrect. Request a new token, remove leading or trailing spaces, and enter it in the client's authentication or secret field.",
+      ".faq details:nth-child(2) summary": "Connected, but no journal tools appear",
+      ".faq details:nth-child(2) p": "Confirm that the client supports Streamable HTTP MCP, then disconnect and reconnect so it repeats initialization and tool discovery. A client that only supports local STDIO MCP cannot connect directly to this remote URL.",
+      ".faq details:nth-child(3) summary": "The AI client did not use the journal service",
+      ".faq details:nth-child(3) p": "Begin with “Use the Journal Knowledge Service” and include the journal code. Confirm that this conversation allows the MCP tools; some clients request approval on first use.",
+      ".faq details:nth-child(4) summary": "Semantic search is partial or temporarily unavailable",
+      ".faq details:nth-child(4) p": "This usually means semantic search has degraded. You can still use explicit year, topic, author, institution, or DOI filters for structured search. The answer should retain the degradation notice.",
+      ".experience-cta p": "Ready to explore the journal with natural language?",
+      ".experience-link": "Try it now <span aria-hidden=\"true\">→</span>",
+      "footer span:first-child": "Journal Knowledge Service · Read-only semantic MCP",
+      "footer span:last-child": "Service status: <a href=\"/health\">/health</a> · MCP endpoint: <a href=\"/mcp\">/mcp</a>"
+    };
+
+    const englishPrompts = {
+      "author-prompt-1": "Use the Journal Knowledge Service to assess how the following research aligns with the historical content of ZDXBNXB. Explain the points of alignment, differences, and areas that need further investigation. List similar papers supporting the assessment, and do not predict acceptance probability. Title: …; Abstract: …; Keywords: …",
+      "author-prompt-2": "Find ZDXBNXB papers from the past ten years related to rice disease-resistance mechanisms. Rank them by relevance to the research question. For each paper, provide the title, authors, year, DOI, online URL, and reason for recommendation, and state the data scope of the search.",
+      "author-prompt-3": "Analyze how the topic of the digital economy developed in ZDXBRWB over the past ten years. Divide the period into meaningful stages, explain publication counts, topic emphasis, and the evidence for each change, and list representative papers.",
+      "author-prompt-4": "Resolve the author name Zhang San in ZDXBNXB. If there are multiple candidates, ask me to confirm first. After confirmation, summarize the author's papers, topics, and coauthorship links in this journal, with shared-paper evidence.",
+      "editor-prompt-1": "Analyze changes in publications on biological breeding in ZDXBNXB from 2016 to 2025. Define the topic and counting method first, then provide the complete annual series, stage breakdown, evidence for change, and representative papers for each stage.",
+      "editor-prompt-2": "Using one consistent definition, compare the topic structure of ZDXBRWB in 2016–2020 and 2021–2025. List stronger, weaker, newly observed, and not-observed topics, quantify changes in counts and shares, and include representative papers.",
+      "editor-prompt-3": "Measure author continuity in ZDXBNXB by the number of years with at least one publication during the past ten years. Return the top ten, explain tie handling and the calculation, and provide annual publication evidence for each author. Do not interpret this as academic quality.",
+      "editor-prompt-4": "Analyze the coauthorship network of authors associated with the common prosperity topic in ZDXBRWB. List the main links, collaboration counts, and shared papers supporting each link, and state that the result does not establish supervisory or organizational relationships."
+    };
+
+    const chineseMarkup = new Map();
+    const chinesePrompts = new Map();
+    let currentLanguage = "zh";
+
+    Object.keys(englishMarkup).forEach((selector) => {
+      const element = document.querySelector(selector);
+      if (element) chineseMarkup.set(selector, element.innerHTML);
+    });
+    Object.keys(englishPrompts).forEach((id) => {
+      const element = document.getElementById(id);
+      if (element && element.firstChild) chinesePrompts.set(id, element.firstChild.nodeValue);
+    });
+
+    function setLanguage(language) {
+      currentLanguage = language === "en" ? "en" : "zh";
+      document.documentElement.lang = currentLanguage === "en" ? "en" : "zh-CN";
+      document.title = currentLanguage === "en"
+        ? "Journal Knowledge Service | Guide for Authors and Editors"
+        : "期刊知识服务｜作者与编辑使用手册";
+      const description = document.querySelector('meta[name="description"]');
+      if (description) {
+        description.content = currentLanguage === "en"
+          ? "A practical guide to the Journal Knowledge Service MCP for authors and editors."
+          : "期刊知识服务 MCP 的作者与编辑使用手册。";
+      }
+
+      Object.entries(englishMarkup).forEach(([selector, english]) => {
+        const element = document.querySelector(selector);
+        if (element) element.innerHTML = currentLanguage === "en" ? english : chineseMarkup.get(selector);
+      });
+      Object.entries(englishPrompts).forEach(([id, english]) => {
+        const element = document.getElementById(id);
+        if (element && element.firstChild) {
+          element.firstChild.nodeValue = currentLanguage === "en" ? english : chinesePrompts.get(id);
+        }
+      });
+
+      document.querySelectorAll("[data-language]").forEach((button) => {
+        button.setAttribute("aria-pressed", String(button.dataset.language === currentLanguage));
+      });
+      document.querySelectorAll("[data-copy]").forEach((button) => {
+        button.textContent = currentLanguage === "en" ? "Copy" : (button.classList.contains("mini-copy") ? "⧉" : "复制");
+        const isMcpUrl = button.dataset.copy === "mcp-url";
+        button.setAttribute(
+          "aria-label",
+          currentLanguage === "en"
+            ? (isMcpUrl ? "Copy MCP URL" : "Copy example question")
+            : (isMcpUrl ? "复制 MCP 地址" : "复制示例问题")
+        );
+      });
+      document.querySelector(".brand")?.setAttribute("aria-label", currentLanguage === "en" ? "Back to top" : "返回使用手册顶部");
+      document.querySelector(".nav")?.setAttribute("aria-label", currentLanguage === "en" ? "Page navigation" : "页面导航");
+      document.querySelector(".language-switch")?.setAttribute("aria-label", currentLanguage === "en" ? "Select page language" : "选择页面语言");
+      document.querySelector(".demo-video")?.setAttribute("aria-label", currentLanguage === "en" ? "Journal Knowledge Service demo" : "期刊知识服务使用演示");
+      document.querySelector(".evidence-spine")?.setAttribute("aria-label", currentLanguage === "en" ? "How the service works" : "服务工作方式");
+      document.querySelector(".config-fields")?.setAttribute("aria-label", currentLanguage === "en" ? "Connection fields" : "连接字段");
+      document.querySelector(".experience-cta")?.setAttribute("aria-label", currentLanguage === "en" ? "Try the journal assistant" : "体验期刊知识助手");
+      const video = document.querySelector(".demo-video");
+      if (video) {
+        const fallback = Array.from(video.childNodes).find((node) => node.nodeType === Node.TEXT_NODE);
+        if (fallback) {
+          if (!video.dataset.zhFallback) video.dataset.zhFallback = fallback.nodeValue.trim();
+          fallback.nodeValue = currentLanguage === "en"
+            ? "Your browser cannot play this video. Use the link below to open it directly."
+            : `\n          ${video.dataset.zhFallback}\n          `;
+        }
+      }
+      try { window.localStorage.setItem("guide-language", currentLanguage); } catch (_) {}
+    }
+
+    document.querySelectorAll("[data-language]").forEach((button) => {
+      button.addEventListener("click", () => setLanguage(button.dataset.language));
+    });
+
+    let preferredLanguage = new URLSearchParams(window.location.search).get("lang");
+    if (!preferredLanguage) {
+      try { preferredLanguage = window.localStorage.getItem("guide-language"); } catch (_) {}
+    }
+    if (!preferredLanguage) preferredLanguage = navigator.language.toLowerCase().startsWith("zh") ? "zh" : "en";
+    setLanguage(preferredLanguage);
+
     const demoVideo = document.querySelector(".demo-video");
     const demoPlayButton = document.getElementById("demo-play");
 
@@ -883,14 +1118,16 @@
       button.addEventListener("click", async () => {
         const target = document.getElementById(button.dataset.copy);
         if (!target) return;
-        const text = target.innerText.replace("⧉", "").trim();
+        const copyTarget = target.cloneNode(true);
+        copyTarget.querySelector("button")?.remove();
+        const text = copyTarget.innerText.trim();
         try {
           await navigator.clipboard.writeText(text);
           const original = button.textContent;
-          button.textContent = "已复制";
+          button.textContent = currentLanguage === "en" ? "Copied" : "已复制";
           window.setTimeout(() => { button.textContent = original; }, 1400);
         } catch (_) {
-          window.prompt("请复制以下内容", text);
+          window.prompt(currentLanguage === "en" ? "Copy the text below" : "请复制以下内容", text);
         }
       });
     });
