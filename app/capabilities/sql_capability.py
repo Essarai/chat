@@ -319,10 +319,105 @@ def _execute_single_plan(
         "source": "sqlite",
     }
 
+    def method_rows(limit: int = 10) -> List[Dict[str, Any]]:
+        pattern = re.compile(
+            r"测序|转录组|代谢组|蛋白组|机器学习|深度学习|机器视觉|"
+            r"点云|扩增|PCR|CRISPR|基因编辑|荧光|显微|色谱|质谱|免疫|"
+            r"原核表达|表达分析|生物信息|检测|分拣|分选",
+            re.I,
+        )
+        return [
+            row for row in db.top_keywords(1000, y0, y1)
+            if pattern.search(str(row.get("keyword") or ""))
+        ][: max(1, min(int(limit), 30))]
+
+    if "data_scope_notice" in ops:
+        if re.search(r"农业人工智能|农业.{0,3}(?:AI|ai)", question or ""):
+            message = (
+                "「农业人工智能」并非语料中稳定使用的精确关键词；"
+                "以下按深度学习、机器学习、机器视觉、智能农业和农业机器人"
+                "等农业 AI 相邻技术词检索，不将单独的「人工智能」命中冒充农业场景。"
+            )
+        elif re.search(r"影响力", question or ""):
+            message = (
+                "当前语料没有被引、项目或奖项等影响力指标；"
+                "以下只能用近10年发文量和共同署名关系识别活跃团队线索，"
+                "不等同于学术影响力排名。"
+            )
+        elif re.search(r"国际合作|哪些国家", question or ""):
+            message = (
+                "当前结构化语料没有作者或机构的国家字段，无法可靠统计国家排名；"
+                "以下只能按论文署名机构及共同署名 DOI 展示机构合作线索。"
+            )
+        else:
+            message = (
+                "当前结构化语料没有作者国籍字段，无法先筛选“中国作者”；"
+                "以下机构排名是当前期刊全部论文的署名机构排名，不能等同于中国作者机构排名。"
+            )
+        return {
+            "scope": "data_scope_notice", "task": "data_scope_notice",
+            "message": message, "source": "sqlite",
+        }
+
+    if "clarification" in ops:
+        return {
+            "scope": "clarification", "task": "clarification",
+            "message": plan.get("focus") or "请补充需要查询的对象。", "source": "conversation",
+        }
+
+    if "research_methods" in ops:
+        return {
+            "scope": "research_methods", "task": "research_methods",
+            "methods": method_rows(int(plan.get("top_n_methods") or 8)),
+            "start_year": y0, "end_year": y1, "source": "sqlite",
+        }
+
+    if "submission_opportunities" in ops:
+        directions = db.top_keywords(int(plan.get("top_n_directions") or 3), y0, y1)
+        methods = method_rows(int(plan.get("top_n_methods") or 5))
+        return {
+            "scope": "submission_opportunities", "task": "submission_opportunities",
+            "directions": directions, "methods": methods,
+            "message": (
+                "可优先评估近期高频方向与常见方法的交叉选题；"
+                "该判断只反映本刊历史发表覆盖，不代表当前征稿政策或录用承诺。"
+            ),
+            "start_year": y0, "end_year": y1, "source": "derived",
+        }
+
+    if "paper_set_topic_summary" in ops:
+        data = db.paper_set_topic_summary(
+            list(plan.get("dois") or entities.get("dois") or []),
+            int(plan.get("top_n") or 20),
+        )
+        data["task"] = "paper_set_topic_summary"
+        data["source_record_count"] = int(
+            plan.get("source_record_count") or data.get("paper_count") or 0
+        )
+        data["paper_authors"] = list(plan.get("paper_authors") or [])
+        return data
+
     if "keyword_growth" in ops:
         data = db.keyword_growth(int(plan.get("top_n_directions") or plan.get("top_n") or 20), y0, y1)
         data["task"] = "keyword_growth"
         return data
+
+    if "period_hotspot_compare" in ops:
+        periods = []
+        for label, a, b in _hotspot_windows(question, y0, y1):
+            periods.append({
+                "period": label,
+                "start_year": a,
+                "end_year": b,
+                "paper_count": sum(
+                    int(row.get("paper_count") or 0) for row in db.yearly_counts(a, b)
+                ),
+                "keywords": db.top_keywords(int(plan.get("top_n") or 10), a, b),
+            })
+        return {
+            "scope": "period_hotspot_compare", "task": "period_hotspot_compare",
+            "periods": periods, "source": "sqlite",
+        }
 
     if "topic_period_compare" in ops:
         data = db.topic_period_compare(kws, y0, y1, int(plan.get("top_n") or 20))
@@ -799,7 +894,7 @@ def _execute_single_plan(
         evidence["task"] = task
 
     if "top_keywords" in ops:
-        evidence["keywords"] = db.top_keywords(20, y0, y1)
+        evidence["keywords"] = db.top_keywords(int(plan.get("top_n") or 20), y0, y1)
         evidence["scope"] = evidence.get("scope") or "journal"
         evidence["task"] = task
 
@@ -881,11 +976,27 @@ def _execute_single_plan(
         return evidence
 
     if "keywords_by_periods" in ops and y0 is not None and y1 is not None:
-        evidence["periods"] = db.keywords_by_periods(_period_triples(int(y0), int(y1)), 8)
+        periods = _period_triples(int(y0), int(y1))
+        if kws:
+            evidence["periods"] = [
+                {
+                    "period": label,
+                    "start_year": a,
+                    "end_year": b,
+                    "paper_count": int(
+                        ((db.topic_keyword_stats([kws[0]], a, b).get("topic_keywords") or [{}])[0]).get("paper_count") or 0
+                    ),
+                    "keywords": db.related_keywords_for_topic(kws[0], 8, a, b),
+                }
+                for label, a, b in periods
+            ]
+            evidence["topic"] = kws[0]
+        else:
+            evidence["periods"] = db.keywords_by_periods(periods, 8)
         evidence["task"] = task
 
     if "author_keywords_sample" in ops:
-        evidence["author_keywords"] = db.author_keywords_sample(8, 6, y0, y1)
+        evidence["author_keywords"] = db.author_keywords_sample(int(plan.get("top_n") or 8), 6, y0, y1)
         evidence["task"] = task
         evidence["scope"] = evidence.get("scope") or "top_teams"
 
@@ -979,7 +1090,14 @@ def execute_plan(
                 selected_topics = selected_topics[: int(canonical.get("top_n_directions") or 5)]
             subplan["keywords"] = selected_topics
             if op_type == "papers_by_top_keywords":
-                subplan["use_selected_topics"] = not bool(re.search(r"策划.{0,12}专题", question or ""))
+                subplan["top_n_directions"] = int(
+                    canonical.get("top_n_directions")
+                    or (canonical.get("top_n") if canonical.get("task") == "hot_topics" else 3)
+                )
+                subplan["use_selected_topics"] = not bool(
+                    re.search(r"策划.{0,12}专题", question or "")
+                    or canonical.get("expand_topic_directions")
+                )
         if op_type == "representative_papers_by_institution" and not selected_institutions:
             for prior in operation_data.values():
                 for row in prior.get("institutions") or []:

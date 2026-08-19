@@ -6,6 +6,8 @@ import urllib.error
 import urllib.request
 from typing import Dict, Iterator, List, Optional
 
+from langsmith import traceable
+
 from app.config import Settings, get_settings
 
 
@@ -21,6 +23,22 @@ def _extract_message_content(content) -> str:
     return str(content or "")
 
 
+def _trace_llm_inputs(inputs: Dict[str, object]) -> Dict[str, object]:
+    return {
+        "messages": inputs.get("messages") or [],
+        "temperature": inputs.get("temperature"),
+        "max_tokens": inputs.get("max_tokens"),
+    }
+
+
+def _trace_llm_output(output: str) -> Dict[str, str]:
+    return {"output": output}
+
+
+def _join_stream_output(chunks: List[str]) -> str:
+    return "".join(chunks)
+
+
 class MiniMaxChat:
     def __init__(self, settings: Settings | None = None):
         self.settings = settings or get_settings()
@@ -32,6 +50,14 @@ class MiniMaxChat:
             "Accept": "text/event-stream",
         }
 
+    @traceable(
+        name="MiniMax.chat",
+        run_type="llm",
+        tags=["minimax"],
+        metadata={"ls_provider": "minimax"},
+        process_inputs=_trace_llm_inputs,
+        process_outputs=_trace_llm_output,
+    )
     def chat(
         self,
         messages: List[Dict[str, str]],
@@ -94,6 +120,15 @@ class MiniMaxChat:
                 time.sleep(1)
         raise RuntimeError(f"chat failed: {last_err}")
 
+    @traceable(
+        name="MiniMax.chat_stream",
+        run_type="llm",
+        tags=["minimax", "stream"],
+        metadata={"ls_provider": "minimax"},
+        process_inputs=_trace_llm_inputs,
+        process_outputs=_trace_llm_output,
+        reduce_fn=_join_stream_output,
+    )
     def chat_stream(
         self,
         messages: List[Dict[str, str]],

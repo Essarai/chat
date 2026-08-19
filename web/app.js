@@ -20,6 +20,7 @@
   const MAX_TURNS = 10; // keep 10 Q&A pairs
   /** @type {{q:string,a:string,citations:any[],partial?:boolean}[]} */
   let turns = [];
+  let conversations = [];
   let askAbort = null;
   let streaming = false;
   let trendsLoaded = false;
@@ -714,6 +715,47 @@
     }
   }
 
+  async function refreshConversationList() {
+    const data = await api(withJournal("/conversations"));
+    conversations = Array.isArray(data?.conversations) ? data.conversations : [];
+    renderHistory();
+  }
+
+  async function openConversation(id) {
+    if (!id || streaming) return;
+    const data = await api(
+      withJournal(`/conversations/${encodeURIComponent(id)}`)
+    );
+    saveConversationId(id);
+    turns = (data?.turns || []).slice(-MAX_TURNS).map((turn) => ({
+      q: turn.question || "",
+      a: turn.answer || "",
+      citations: turn.citations || [],
+      partial: false,
+    }));
+    persistTurns();
+    renderChat();
+  }
+
+  async function deleteConversation(id, title) {
+    if (!id || streaming) return;
+    if (!globalThis.confirm(`确定删除对话“${title || "未命名对话"}”吗？`)) return;
+    const deletingActive = id === conversationId();
+    await api(withJournal(`/conversations/${encodeURIComponent(id)}`), {
+      method: "DELETE",
+    });
+    await refreshConversationList();
+    if (!deletingActive) return;
+    if (conversations.length) {
+      await openConversation(conversations[0].conversation_id);
+      return;
+    }
+    turns = [];
+    saveConversationId(newConversationId());
+    persistTurns();
+    renderChat();
+  }
+
   function setStreamingUi(on) {
     streaming = !!on;
     askForm.classList.toggle("is-streaming", streaming);
@@ -778,29 +820,46 @@
   function renderHistory() {
     if (!historyListEl) return;
     historyListEl.innerHTML = "";
-    if (historyEmptyEl) historyEmptyEl.hidden = turns.length > 0;
-    turns.forEach((turn, index) => {
+    if (historyEmptyEl) historyEmptyEl.hidden = conversations.length > 0;
+    const activeId = conversationId();
+    conversations.forEach((conversation, index) => {
       const item = document.createElement("li");
       const button = document.createElement("button");
       button.type = "button";
       button.className = "history-item";
-      if (index === turns.length - 1) {
+      if (conversation.conversation_id === activeId) {
         button.classList.add("is-current");
         button.setAttribute("aria-current", "true");
       }
       button.innerHTML =
         `<span class="history-index">${index + 1}</span>` +
-        `<span class="history-question">${escapeHtml(turn.q || "未命名问题")}</span>`;
-      button.title = turn.q || "未命名问题";
-      button.addEventListener("click", () => {
-        const target = messagesEl.querySelector(`[data-turn-index="${index}"]`);
-        if (!target) return;
-        target.scrollIntoView({ behavior: "smooth", block: "start" });
-        target.classList.remove("is-located");
-        requestAnimationFrame(() => target.classList.add("is-located"));
-        globalThis.setTimeout(() => target.classList.remove("is-located"), 900);
+        `<span class="history-question">${escapeHtml(conversation.title || "未命名对话")}</span>`;
+      button.title = `${conversation.title || "未命名对话"}（${conversation.turn_count || 0}轮）`;
+      button.addEventListener("click", async () => {
+        try {
+          await openConversation(conversation.conversation_id);
+        } catch (err) {
+          console.error("加载对话失败", err);
+        }
+      });
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "history-delete";
+      remove.textContent = "×";
+      remove.title = "删除对话";
+      remove.setAttribute("aria-label", `删除对话：${conversation.title || "未命名对话"}`);
+      remove.addEventListener("click", async () => {
+        try {
+          await deleteConversation(
+            conversation.conversation_id,
+            conversation.title
+          );
+        } catch (err) {
+          console.error("删除对话失败", err);
+        }
       });
       item.appendChild(button);
+      item.appendChild(remove);
       historyListEl.appendChild(item);
     });
   }
@@ -930,6 +989,7 @@
       setStreamingUi(false);
       persistTurns();
       renderChat();
+      refreshConversationList().catch(() => {});
       questionEl.focus();
     }
   }
@@ -1153,9 +1213,21 @@
     }
   }
 
-  function showWelcome() {
+  async function showWelcome() {
     loadTurns();
     renderChat();
+    try {
+      await refreshConversationList();
+      const activeId = conversationId();
+      const selected = conversations.find((row) => row.conversation_id === activeId);
+      if (selected) {
+        await openConversation(activeId);
+      } else if (conversations.length) {
+        await openConversation(conversations[0].conversation_id);
+      }
+    } catch (_) {
+      // Keep the sessionStorage fallback when the backend is temporarily unavailable.
+    }
   }
 
   function clearChat() {
@@ -1166,6 +1238,7 @@
       sessionStorage.setItem(conversationStorageKey(), newConversationId());
     } catch (_) {}
     renderChat();
+    refreshConversationList().catch(() => {});
   }
 
   function stopGraph() {

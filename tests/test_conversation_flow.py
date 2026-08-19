@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
 from fastapi import HTTPException
 
 from app.agents.controller import init_state
 from app.agents.capability_planner import plan_from_intent
+from app.agents.coverage import assess_operations
+from app.agents.generate import try_operation_plan_answer
+from app.agents.operation_contracts import normalize_query_plan
 from app.agents.turn_understand import understand_contextual_turn
 from app.api.main import _validated_journal_id
 from app.capabilities.sql_capability import execute_plan
@@ -83,6 +88,32 @@ class ConversationFlowTests(unittest.TestCase):
         _, most = understand_contextual_turn("列出其中发文最多的作者论文", previous)
         self.assertEqual(most["author_ids"], [previous["result_set"]["items"][0]["id"]])
 
+    def test_natural_top_three_followup_expands_previous_authors(self):
+        previous = self._top_turn()
+        intent, plan = understand_contextual_turn("前三的作者有哪些发文？", previous)
+        self.assertEqual(intent["kind"], "followup")
+        self.assertEqual(intent["selector"], {"first": 3})
+        self.assertEqual(plan["task"], "authors_papers")
+        self.assertEqual(
+            plan["author_ids"],
+            [row["id"] for row in previous["result_set"]["items"][:3]],
+        )
+        self.assertEqual((plan["year_start"], plan["year_end"]), (2022, 2026))
+        normalized = normalize_query_plan(plan, "前三的作者有哪些发文？", intent)
+        covered = assess_operations(
+            {
+                "query_plan": normalized,
+                "sql_evidence": execute_plan(normalized, db=self.repo),
+                "kg_evidence": {},
+                "rag_evidence": {},
+            }
+        )["result_set"]
+        self.assertEqual(
+            {item["author_id"] for item in covered["items"]},
+            set(normalized["author_ids"]),
+        )
+        self.assertEqual(covered["total_count"], len(covered["items"]))
+
     def test_followup_explicit_time_overrides_inherited_time(self):
         previous = self._top_turn()
         intent, plan = understand_contextual_turn("列出这些作者近三年的论文", previous)
@@ -117,6 +148,19 @@ class ConversationFlowTests(unittest.TestCase):
         self.assertEqual((plan["year_start"], plan["year_end"]), (2017, 2026))
         self.assertNotIn("author_ids", plan)
 
+    def test_author_ranking_question_words_are_not_person_names(self):
+        intent, plan = understand_contextual_turn(
+            "最近3年发文量前10的作者有哪些", None
+        )
+        self.assertEqual(intent["target_entity"], "author")
+        self.assertEqual(plan["main_task"], "top_authors")
+        self.assertEqual(
+            [operation["type"] for operation in plan["operations"]],
+            ["top_authors"],
+        )
+        self.assertIsNone(plan["author_name"])
+        self.assertEqual((plan["year_start"], plan["year_end"]), (2024, 2026))
+
     def test_sort_preserves_previous_dois(self):
         previous = {
             "turn_id": "t1",
@@ -133,6 +177,60 @@ class ConversationFlowTests(unittest.TestCase):
         intent, plan = understand_contextual_turn("这些论文按年份排序", previous)
         self.assertEqual(intent["action"], "sort")
         self.assertEqual([p["doi"] for p in plan["targets"]], ["d2", "d1"])
+
+    def test_paper_set_topic_similarity_uses_previous_dois(self):
+        dois = [
+            "10.3785/j.issn.1008-9209.2023.12.184",
+            "10.3785/j.issn.1008-9209.2024.01.101",
+            "10.3785/j.issn.1008-9209.2024.09.191",
+            "10.3785/j.issn.1008-9209.2024.10.171",
+        ]
+        previous = {
+            "turn_id": "papers-turn",
+            "query_plan": {"task": "authors_papers"},
+            "result_set": {
+                "constraints": {"year_start": 2024, "year_end": 2026, "keywords": []},
+                "items": [
+                    {"type": "paper", "doi": doi, "author_id": "a1", "author_name": "杨怡"}
+                    for doi in dois
+                ]
+                + [{"type": "paper", "doi": dois[0], "author_id": "a2", "author_name": "陈学秋"}],
+            },
+            "continuation": {},
+        }
+        intent, plan = understand_contextual_turn(
+            "这些发文的主题有什么相似性", previous
+        )
+        self.assertEqual(intent["kind"], "followup")
+        self.assertEqual(intent["action"], "summarize")
+        self.assertEqual(plan["dois"], dois)
+        self.assertEqual(plan["source_record_count"], 5)
+        normalized = normalize_query_plan(plan, "这些发文的主题有什么相似性", intent)
+        self.assertEqual(
+            [operation["type"] for operation in normalized["operations"]],
+            ["paper_set_topic_summary"],
+        )
+        self.assertEqual(normalized["keywords"], [])
+        self.assertEqual(normalized["constraints"]["keywords"], [])
+        sql = execute_plan(normalized, db=self.repo)
+        covered = assess_operations(
+            {
+                "query_plan": normalized,
+                "sql_evidence": sql,
+                "kg_evidence": {},
+                "rag_evidence": {},
+            }
+        )
+        answer = try_operation_plan_answer(
+            {
+                "query_plan": normalized,
+                "operation_results": covered["operation_results"],
+                "coverage_report": covered["coverage_report"],
+            }
+        )
+        self.assertEqual(sql["paper_count"], 4)
+        self.assertIn("刚地弓形虫", answer)
+        self.assertNotIn("None", answer)
 
     def test_continue_uses_cursor_without_restarting(self):
         previous = {
@@ -326,8 +424,28 @@ class ConversationFlowTests(unittest.TestCase):
                         SimpleNamespace(answer=f"a{turn_index}", citations=[], evidence={}),
                     ),
                 )
-        self.assertLessEqual(len(store._items), 2)
+        self.assertLessEqual(len(store.list_conversations("ZDXBNXB")), 2)
         self.assertLessEqual(len(store.get("c2", "ZDXBNXB").turns), 2)
+
+    def test_store_survives_reopen(self):
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "conversations.db"
+            first = ConversationStore(path, ttl_seconds=0, max_sessions=0)
+            first.append(
+                "persistent",
+                "ZDXBNXB",
+                build_turn_record(
+                    "第一轮",
+                    SimpleNamespace(answer="回答", citations=[], evidence={}),
+                ),
+            )
+            first.close()
+
+            reopened = ConversationStore(path, ttl_seconds=0, max_sessions=0)
+            state = reopened.get("persistent", "ZDXBNXB")
+            self.assertEqual([(turn.question, turn.answer) for turn in state.turns], [("第一轮", "回答")])
+            self.assertEqual(reopened.list_conversations("ZDXBNXB")[0]["turn_count"], 1)
+            reopened.close()
 
     def test_turn_record_preserves_operation_evidence(self):
         result = SimpleNamespace(
@@ -372,6 +490,20 @@ class ConversationFlowTests(unittest.TestCase):
         }
         plan = plan_from_intent(intent, "期刊接受文章的领域变化")
         self.assertEqual(plan["task"], "hotspot_compare")
+
+    def test_ten_years_within_accepted_paper_fields_is_not_an_author(self):
+        state = init_state("10年内接受论文的领域变化", journal_id="ZDXBNXB")
+        plan = state["query_plan"]
+        self.assertEqual(plan["task"], "field_evolution")
+        self.assertIsNone(plan.get("author_name"))
+        self.assertEqual((plan.get("year_start"), plan.get("year_end")), (2017, 2026))
+        self.assertEqual(
+            [row.get("type") for row in plan.get("operations") or []],
+            [
+                "yearly_counts", "top_keywords", "keyword_growth",
+                "topic_period_compare", "representative_papers_by_topic",
+            ],
+        )
 
     def test_hotspot_inventory_does_not_search_literal_hotspot(self):
         intent = {

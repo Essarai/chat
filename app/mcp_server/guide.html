@@ -520,6 +520,30 @@
     details[open] summary::after { content: "−"; }
     details p { max-width: 760px; margin: -4px 0 22px; color: var(--ink-soft); }
 
+    .experience-cta {
+      margin: 24px 0 0;
+      padding: 42px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 28px;
+      background: var(--jade-dark);
+      color: var(--white);
+    }
+
+    .experience-cta p { margin: 0; font: 700 28px/1.35 var(--display); }
+
+    .experience-link {
+      flex: 0 0 auto;
+      padding: 12px 20px;
+      border: 1px solid var(--white);
+      color: var(--white);
+      text-decoration: none;
+      font-weight: 700;
+    }
+
+    .experience-link:hover { background: var(--white); color: var(--jade-dark); }
+
     footer {
       width: min(var(--max), calc(100% - 40px));
       margin: 0 auto;
@@ -562,6 +586,8 @@
       .boundary { border-right: 0; border-bottom: 1px solid var(--line); }
       .boundary:last-child { border-bottom: 0; }
       .journal-table { display: block; overflow-x: auto; white-space: nowrap; }
+      .experience-cta { padding: 28px 22px; flex-direction: column; align-items: flex-start; }
+      .experience-cta p { font-size: 24px; }
       footer { flex-direction: column; }
     }
 
@@ -817,6 +843,11 @@
           <p>这通常表示语义服务降级。仍可改用明确的年份、主题、作者、机构或 DOI 条件执行结构化检索；回答中应保留降级说明。</p>
         </details>
       </div>
+    </section>
+
+    <section class="experience-cta" aria-label="体验期刊知识助手">
+      <p>准备好了吗？现在就用自然语言查询期刊知识。</p>
+      <a class="experience-link" href="/ask">立即体验 <span aria-hidden="true">→</span></a>
     </section>
   </main>
 

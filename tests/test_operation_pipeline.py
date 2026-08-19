@@ -3,10 +3,11 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
+from app.agents.capability_planner import plan_from_intent
 from app.agents.coverage import assess_operations
 from app.agents.operation_contracts import normalize_query_plan, operation_types
 from app.agents.query_understand import query_understand_node
-from app.agents.router_v2 import extract_node
+from app.agents.router_v2 import extract_node, router_node
 from app.capabilities.sql_capability import execute_plan
 from app.config import get_corpus_settings
 from app.services.sqlite_repo import SQLiteRepo
@@ -51,6 +52,140 @@ class OperationPipelineTests(unittest.TestCase):
             query_understand_node(state)  # type: ignore[arg-type]
         understand.assert_called_once()
         self.assertFalse(state["entities"]["extract_meta"]["llm_confirmed"])
+
+    def test_invalid_locked_rule_candidate_falls_back_to_llm(self):
+        state = {
+            "question": "帮我分析一下刊物近年来关注内容的转向",
+            "entities": {"keywords": []},
+            "turn_intent": {"source": "deterministic-core"},
+            "query_plan": {
+                "task": "generic",
+                "sql_ops": [],
+                "operations": [],
+                "locked": True,
+                "plan_source": "deterministic",
+            },
+        }
+        with patch(
+            "app.agents.query_understand.llm_fill_intent",
+            return_value={
+                "entity": "journal",
+                "operation": "trend",
+                "requested_operations": [
+                    {"type": "top_keywords", "required": True},
+                    {"type": "keyword_growth", "required": True},
+                    {"type": "topic_period_compare", "required": True},
+                ],
+                "goal": "research_analysis",
+                "sources": ["sql"],
+                "topic": [],
+                "confidence": 0.93,
+            },
+        ) as understand:
+            result = query_understand_node(state)  # type: ignore[arg-type]
+        understand.assert_called_once()
+        self.assertEqual(result["query_plan"], {})
+        self.assertTrue(result["entities"]["intent_meta"]["rule_candidate_rejected"])
+        state.update(result)
+        routed = router_node(state)  # type: ignore[arg-type]
+        self.assertEqual(routed["route"]["plan_source"], "schema")
+        self.assertEqual(routed["query_plan"]["task"], "hotspot_compare")
+        self.assertEqual(
+            operation_types(routed["query_plan"]),
+            ["top_keywords", "keyword_growth", "topic_period_compare"],
+        )
+
+    def test_valid_locked_rule_candidate_skips_llm(self):
+        state = {
+            "question": "10年内接受论文的领域变化",
+            "entities": {"keywords": []},
+            "turn_intent": {"source": "deterministic-core"},
+            "query_plan": {
+                "task": "field_evolution",
+                "sql_ops": ["top_keywords", "keyword_growth", "topic_period_compare"],
+                "operations": [
+                    {"type": "top_keywords"},
+                    {"type": "keyword_growth"},
+                    {"type": "topic_period_compare"},
+                ],
+                "locked": True,
+                "plan_source": "deterministic",
+            },
+        }
+        with patch("app.agents.query_understand.llm_fill_intent") as understand:
+            query_understand_node(state)  # type: ignore[arg-type]
+        understand.assert_not_called()
+
+    def test_low_confidence_broad_rule_is_confirmed_by_llm(self):
+        state = {
+            "question": "围绕期刊内容做个综合判断",
+            "entities": {},
+            "turn_intent": {"source": "deterministic-core", "confidence": 0.55},
+            "query_plan": {
+                "task": "journal_overview",
+                "sql_ops": ["journal_overview"],
+                "operations": [{"type": "journal_overview"}],
+                "locked": True,
+                "plan_source": "deterministic",
+                "rule_confidence": 0.55,
+            },
+        }
+        with patch(
+            "app.agents.query_understand.llm_fill_intent",
+            return_value={
+                "entity": "journal", "operation": "summarize",
+                "requested_operations": [{"type": "journal_overview", "required": True}],
+                "goal": "research_analysis", "sources": ["sql"],
+                "topic": [], "confidence": 0.9,
+            },
+        ) as understand:
+            result = query_understand_node(state)  # type: ignore[arg-type]
+        understand.assert_called_once()
+        self.assertEqual(result["query_plan"], {})
+
+    def test_locked_context_resolution_skips_llm(self):
+        state = {
+            "question": "展开第3位作者的论文",
+            "entities": {},
+            "turn_intent": {"source": "context"},
+            "query_plan": {
+                "task": "authors_papers",
+                "sql_ops": ["papers_for_authors"],
+                "operations": [{"type": "papers_for_authors"}],
+                "author_ids": ["author-3"],
+                "locked": True,
+                "plan_source": "conversation",
+            },
+        }
+        with patch("app.agents.query_understand.llm_fill_intent") as understand:
+            query_understand_node(state)  # type: ignore[arg-type]
+        understand.assert_not_called()
+
+    def test_llm_topic_trend_without_topic_is_reconciled(self):
+        plan = plan_from_intent(
+            {
+                "entity": "topic",
+                "operation": "trend",
+                "requested_operations": [{"type": "topic_yearly", "required": True}],
+                "goal": "research_analysis",
+                "sources": ["sql"],
+                "topic": [],
+                "time_range": {"start": 2017, "end": 2026, "last_n": 10},
+                "metric": "keyword_freq",
+                "confidence": 0.9,
+            },
+            "想看看这十年刊物选题版图是怎么迁移的",
+        )
+        self.assertIsNotNone(plan)
+        self.assertEqual(plan["task"], "hotspot_compare")
+        self.assertEqual(
+            plan["sql_ops"],
+            [
+                "top_keywords", "keyword_growth", "topic_period_compare",
+                "representative_papers_by_topic",
+            ],
+        )
+        self.assertEqual((plan["year_start"], plan["year_end"]), (2017, 2026))
 
     def test_author_ranking_and_papers_are_two_operations(self):
         plan = normalize_query_plan(

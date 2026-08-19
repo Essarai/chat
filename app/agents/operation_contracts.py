@@ -73,17 +73,21 @@ CONTRACTS: Dict[str, Dict[str, Any]] = {
     "present_resultset": {"kind": "papers", "items": "authors"},
     "author_profile": {"kind": "author", "items": "papers", "required_fields": ["doi", "title_zh", "year"]},
     "author_topic_summary": {"kind": "ranking", "items": "keywords", "required_fields": ["keyword", "paper_count"]},
+    "paper_set_topic_summary": {"kind": "ranking", "items": "keywords", "required_fields": ["keyword", "paper_count"]},
     "topic_yearly": {"kind": "trend", "min_periods": 2},
     "topic_keyword_counts": {"kind": "topic", "items": "topic_keywords"},
     "yearly_counts": {"kind": "trend", "items": "yearly", "min_periods": 2},
     "yoy_growth": {"kind": "trend", "items": "yoy", "min_periods": 2},
     "keyword_growth": {"kind": "trend", "items": "keyword_growth", "min_periods": 2},
     "topic_period_compare": {"kind": "comparison", "items": "periods", "min_periods": 2},
+    "period_hotspot_compare": {"kind": "comparison", "items": "periods", "min_periods": 2},
     "author_direction_evolution": {"kind": "evolution", "items": "periods", "min_periods": 2, "min_papers": 3},
     "author_direction_diversity": {"kind": "ranking", "items": "authors", "required_fields": ["author_id", "direction_count"]},
     "institution_stability": {"kind": "stability", "items": "institutions", "min_periods": 5},
     "papers_by_top_keywords": {"kind": "papers", "items": "directions"},
     "keywords_by_periods": {"kind": "comparison", "items": "periods", "min_periods": 2},
+    "research_methods": {"kind": "ranking", "items": "methods", "required_fields": ["keyword", "paper_count"]},
+    "submission_opportunities": {"kind": "opportunity"},
     "author_keywords_sample": {"kind": "ranking", "items": "author_keywords", "required_fields": ["author_id", "paper_count"]},
     "institution_authors": {"kind": "ranking", "items": "authors", "required_fields": ["author_id", "paper_count"]},
     "topic_papers": {"kind": "papers", "items": "papers"},
@@ -98,6 +102,7 @@ CONTRACTS: Dict[str, Dict[str, Any]] = {
     "topic_coverage": {"kind": "coverage", "allow_empty": True},
     "submission_fit": {"kind": "coverage", "allow_empty": True},
     "submission_guidance": {"kind": "derived"},
+    "data_scope_notice": {"kind": "notice"},
     "journal_overview": {"kind": "overview"},
     "semantic_search": {"kind": "papers", "items": "hits"},
     "keyword_ego": {"kind": "graph"},
@@ -126,6 +131,8 @@ def _operation_types_from_question(question: str, plan: Dict[str, Any]) -> List[
     q = question or ""
     task = str(plan.get("task") or "generic")
     ops = list(plan.get("sql_ops") or [])
+    if task == "clarification":
+        return ["clarification"]
     for op in plan.get("kg_ops") or []:
         if op not in ops:
             ops.append(op)
@@ -149,6 +156,13 @@ def _operation_types_from_question(question: str, plan: Dict[str, Any]) -> List[
     # Compatibility aliases are normalized here; executors never interpret
     # the old umbrella task as if it were one complete piece of evidence.
     replace_legacy("hotspot_compare", ["top_keywords", "keyword_growth", "topic_period_compare"])
+    if task == "period_hotspot_compare":
+        return ["period_hotspot_compare"]
+    if task == "field_evolution":
+        return list(dict.fromkeys(ops or [
+            "yearly_counts", "top_keywords", "keyword_growth", "topic_period_compare",
+            "representative_papers_by_topic",
+        ]))
 
     if not plan.get("keywords") and re.search(r"发文|发表论文|论文数量", q) and re.search(r"每年|逐年|趋势|数量变化|增长最快", q):
         add("yearly_counts")
@@ -156,6 +170,8 @@ def _operation_types_from_question(question: str, plan: Dict[str, Any]) -> List[
     if re.search(r"发文量最多的(?:研究)?方向|研究方向.*(?:最多|排名)", q):
         add("top_keywords")
         add("papers_by_top_keywords")
+    if task == "top_authors" and re.search(r"主要研究方向|研究方向", q):
+        add("author_keywords_sample")
     if re.search(r"机构|单位", q) and re.search(r"发文.*(?:最多|排名)|高产", q):
         add("top_institutions")
     if plan.get("institution") and re.search(r"作者|论文|成果", q):
@@ -218,7 +234,7 @@ def _operation_types_from_question(question: str, plan: Dict[str, Any]) -> List[
         add("keyword_growth")
     if task == "topic_evolution" and re.search(r"趋势|发展|变化|演变", q):
         add("topic_yearly")
-    if re.search(r"(?:领域|热点|研究方向).*(?:变化|演变|增长|减弱)|(?:变化|演变).*(?:领域|热点|研究方向)", q):
+    if not plan.get("keywords") and re.search(r"(?:领域|热点|研究方向).*(?:变化|演变|增长|减弱)|(?:变化|演变).*(?:领域|热点|研究方向)", q):
         add("yearly_counts")
         add("top_keywords")
         add("keyword_growth")
@@ -234,6 +250,8 @@ def _operation_types_from_question(question: str, plan: Dict[str, Any]) -> List[
             add("institutions_by_keyword")
         add("submission_guidance")
     if re.search(r"核心作者|核心团队|研究团队", q) and re.search(r"方向|变化|演化", q):
+        if re.search(r"影响力", q):
+            add("data_scope_notice")
         add("top_authors")
         add("papers_for_authors")
         add("author_direction_evolution")
@@ -300,6 +318,16 @@ def _operation_types_from_question(question: str, plan: Dict[str, Any]) -> List[
         add("authors_by_keyword")
         add("institutions_by_keyword")
         add("topic_papers")
+    if re.search(r"国际合作|哪些国家", q):
+        add("data_scope_notice")
+        add("top_institutions")
+        add("institution_network")
+    if re.search(r"中国作者", q) and re.search(r"机构", q):
+        add("data_scope_notice")
+        add("top_institutions")
+    if re.search(r"标题|关键词", q) and re.search(r"包含", q) and re.search(r"分类|研究方向", q):
+        add("topic_papers")
+        add("papers_by_top_keywords")
 
     def keep_ordered(required: List[str]) -> None:
         nonlocal ops
@@ -319,6 +347,12 @@ def _operation_types_from_question(question: str, plan: Dict[str, Any]) -> List[
         if re.search(r"合作|伙伴|合作者", q):
             required.append("author_collaborators")
         keep_ordered(required)
+    elif re.search(r"国际合作|哪些国家", q):
+        keep_ordered(["data_scope_notice", "top_institutions", "institution_network"])
+    elif re.search(r"中国作者", q) and re.search(r"机构", q):
+        keep_ordered(["data_scope_notice", "top_institutions"])
+    elif re.search(r"标题|关键词", q) and re.search(r"包含", q) and re.search(r"分类|研究方向", q):
+        keep_ordered(["topic_papers", "papers_by_top_keywords"])
     elif plan.get("institution") and re.search(r"作者|论文|成果", q):
         keep_ordered(["institution_authors"])
     elif re.search(r"策划.{0,12}专题", q):
@@ -359,7 +393,10 @@ def _operation_types_from_question(question: str, plan: Dict[str, Any]) -> List[
             required.append("submission_guidance")
         keep_ordered(required)
     elif re.search(r"核心作者|核心团队|研究团队", q) and re.search(r"方向|变化|演化", q):
-        keep_ordered(["top_authors", "papers_for_authors", "author_direction_evolution", "author_collaborators"])
+        required = ["top_authors", "papers_for_authors", "author_direction_evolution", "author_collaborators"]
+        if re.search(r"影响力", q):
+            required.insert(0, "data_scope_notice")
+        keep_ordered(required)
     elif re.search(r"下一阶段|内容缺口|未来可能|未来趋势|新兴(?:研究)?方向", q):
         keep_ordered(["keyword_growth", "topic_period_compare", "papers_by_top_keywords", "representative_authors_by_topic"])
     elif re.search(r"前\s*(?:\d+|[一二三四五六七八九十两]+)\s*年.*后\s*(?:\d+|[一二三四五六七八九十两]+)\s*年", q):
@@ -419,7 +456,10 @@ def normalize_query_plan(
             out["year_end"] = datetime.now().year - 1
             out["year_start"] = out["year_end"] - 9
     topics = _clean_topics(out.get("keywords") or intent.get("topic") or [])
-    if not topics:
+    # A locked conversation plan is already the task contract.  In particular,
+    # an explicit empty keyword list must not be repopulated from pronoun-like
+    # follow-ups such as “这些发文的主题有什么相似性”.
+    if not topics and not (out.get("locked") and "keywords" in out):
         from app.agents.intent_schema import _seed_topics_from_question
 
         topics = _clean_topics(_seed_topics_from_question(question))
@@ -490,6 +530,9 @@ def normalize_query_plan(
                 "author_name": out.get("author_name"),
                 "author_ids": out.get("author_ids"),
                 "institution": out.get("institution"),
+                "dois": out.get("dois"),
+                "paper_authors": out.get("paper_authors"),
+                "source_record_count": out.get("source_record_count"),
             }
             depends: List[str] = []
             if op_type == "papers_for_authors" and "top_authors" in op_types:

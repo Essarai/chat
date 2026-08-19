@@ -97,7 +97,7 @@ class SQLiteRepo:
             params.append(end_year)
         params.append(limit)
         sql = f"""
-            SELECT pk.label_zh AS keyword, COUNT(*) AS paper_count
+            SELECT pk.label_zh AS keyword, COUNT(DISTINCT pk.doi) AS paper_count
             FROM paper_keywords pk
             JOIN papers p ON p.doi = pk.doi
             WHERE {' AND '.join(clauses)}
@@ -342,6 +342,78 @@ class SQLiteRepo:
                 }
             )
         return [by_id[aid] for aid in ids]
+
+    def paper_set_topic_summary(
+        self, dois: List[str], limit: int = 20
+    ) -> Dict[str, Any]:
+        """Summarize keyword overlap for an explicit DOI result set."""
+        ids = list(dict.fromkeys(str(doi).strip() for doi in dois or [] if str(doi).strip()))[:100]
+        if not ids:
+            return {
+                "scope": "paper_set_topic_summary",
+                "papers": [],
+                "keywords": [],
+                "common_keywords": [],
+                "paper_count": 0,
+                "source": "sqlite",
+            }
+        placeholders = ",".join("?" for _ in ids)
+        with self._conn() as conn:
+            rows = self._rows(
+                conn.execute(
+                    f"""
+                    SELECT p.doi, p.title_zh, p.year, pk.label_zh AS keyword
+                    FROM papers p
+                    LEFT JOIN paper_keywords pk ON pk.doi = p.doi
+                    WHERE p.doi IN ({placeholders})
+                    ORDER BY p.year DESC, p.doi, pk.label_zh
+                    """,
+                    ids,
+                )
+            )
+        by_doi: Dict[str, Dict[str, Any]] = {}
+        keyword_dois: Dict[str, set] = {}
+        for row in rows:
+            doi = str(row.get("doi") or "")
+            paper = by_doi.setdefault(
+                doi,
+                {
+                    "doi": doi,
+                    "title_zh": row.get("title_zh"),
+                    "year": row.get("year"),
+                    "keywords": [],
+                },
+            )
+            keyword = str(row.get("keyword") or "").strip()
+            if keyword and keyword not in paper["keywords"]:
+                paper["keywords"].append(keyword)
+                keyword_dois.setdefault(keyword, set()).add(doi)
+        papers = [by_doi[doi] for doi in ids if doi in by_doi]
+        paper_count = len(papers)
+        keywords = []
+        for keyword, matched in keyword_dois.items():
+            representatives = [paper for paper in papers if paper["doi"] in matched][:3]
+            keywords.append(
+                {
+                    "keyword": keyword,
+                    "paper_count": len(matched),
+                    "paper_share_pct": round(len(matched) / paper_count * 100, 1)
+                    if paper_count
+                    else 0.0,
+                    "papers": representatives,
+                }
+            )
+        keywords.sort(key=lambda row: (-int(row["paper_count"]), str(row["keyword"])))
+        keywords = keywords[: max(1, min(int(limit), 50))]
+        return {
+            "scope": "paper_set_topic_summary",
+            "papers": papers,
+            "keywords": keywords,
+            "common_keywords": [row for row in keywords if int(row["paper_count"]) >= 2],
+            "paper_count": paper_count,
+            "papers_with_keywords": sum(1 for paper in papers if paper["keywords"]),
+            "source": "sqlite",
+        }
 
     def top_institutions(
         self,
@@ -702,15 +774,24 @@ class SQLiteRepo:
             papers = self._rows(
                 conn.execute(
                     """
-                    SELECT p.doi, p.title_zh, p.year
+                    SELECT p.doi, p.title_zh, p.year,
+                           GROUP_CONCAT(DISTINCT pk.label_zh) AS keyword_names
                     FROM papers p
                     JOIN paper_authors pa1 ON pa1.doi = p.doi AND pa1.author_id = ?
                     JOIN paper_authors pa2 ON pa2.doi = p.doi AND pa2.author_id = ?
+                    LEFT JOIN paper_keywords pk ON pk.doi = p.doi
+                    GROUP BY p.doi, p.title_zh, p.year
                     ORDER BY p.year DESC, p.doi
                     """,
                     (a["author_id"], b["author_id"]),
                 )
             )
+        for paper in papers:
+            paper["keywords"] = [
+                value.strip()
+                for value in str(paper.pop("keyword_names", "") or "").split(",")
+                if value.strip()
+            ]
         return {
             "scope": "coauthored_papers",
             "source": "sqlite",

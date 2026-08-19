@@ -36,6 +36,46 @@ def _qu_enabled() -> bool:
     return raw not in {"0", "false", "no", "off"}
 
 
+def _rule_plan_needs_llm(
+    question: str,
+    plan: Dict[str, Any],
+    turn_intent: Dict[str, Any],
+) -> bool:
+    """Reject deterministic candidates that are unsafe to lock without QU."""
+    if not plan or not plan.get("locked"):
+        return True
+    if (turn_intent or {}).get("needs_clarification"):
+        return False
+    plan_source = str(plan.get("plan_source") or "")
+    if plan_source == "conversation" or (turn_intent or {}).get("source") == "context":
+        return False
+    try:
+        if float(plan.get("rule_confidence", 1.0)) < 0.9:
+            return True
+    except (TypeError, ValueError):
+        return True
+    task = str(plan.get("task") or "generic")
+    operations = [
+        str(item.get("type") or "")
+        for item in (plan.get("operations") or [])
+        if isinstance(item, dict)
+    ] or [str(item) for item in (plan.get("sql_ops") or [])]
+    if task == "generic" or not operations:
+        return True
+    if plan.get("author_name") and task not in {
+        "author_profile", "coauthored_papers", "author_trajectory",
+    }:
+        return True
+    if task in {"topic_evolution", "keyword_authors", "keyword_collab", "topic_coverage"} \
+            and not plan.get("keywords"):
+        return True
+    if task in {"institution_authors"} and not plan.get("institution"):
+        return True
+    # Rules may shortcut exact task families; anything labelled otherwise is
+    # only a candidate and should be confirmed by semantic understanding.
+    return plan_source != "deterministic"
+
+
 def _boost_confidence(intent: Dict[str, Any], question: str) -> Dict[str, Any]:
     """Raise confidence when slots clearly match a known schema combo."""
     out = dict(intent)
@@ -115,6 +155,7 @@ Schema（封闭枚举）:
 10. confidence：槽位清晰≥0.8；模糊≤0.5。
 11. 复合问题必须拆成多个 requested_operations。例如作者排名及其论文 → top_authors、papers_for_authors；作者论文及研究主题 → author_profile、author_topic_summary。
 12. requested_operations.type 只能从以下白名单选择：{allowed_operations}。不确定时不要创造新名称。
+13. topic_yearly、topic_keyword_counts 等专题操作必须同时给出具体 topic；若用户问全刊选题/领域/热点迁移且没有指定主题，应使用 top_keywords、keyword_growth、topic_period_compare、representative_papers_by_topic。
 
 用户问题：{question}
 正则草稿：{json.dumps(draft, ensure_ascii=False)}
@@ -219,9 +260,13 @@ def heuristic_intent(question: str, draft: Dict[str, Any]) -> Dict[str, Any]:
 def query_understand_node(state: JournalState) -> Dict[str, Any]:
     question = state.get("question") or ""
     draft = dict(state.get("entities") or {})
-    if (state.get("query_plan") or {}).get("locked"):
+    candidate = dict(state.get("query_plan") or {})
+    turn_intent = dict(state.get("turn_intent") or {})
+    if candidate.get("locked") and not _rule_plan_needs_llm(
+        question, candidate, turn_intent
+    ):
         return {
-            "intent": dict(state.get("turn_intent") or {}),
+            "intent": turn_intent,
             "entities": draft,
             "stage": "understood",
         }
@@ -229,7 +274,10 @@ def query_understand_node(state: JournalState) -> Dict[str, Any]:
         intent = empty_intent()
         intent["confidence"] = 0.0
         intent["notes"] = "ENABLE_QUERY_UNDERSTAND=0"
-        return {"intent": intent, "stage": "understood"}
+        updates: Dict[str, Any] = {"intent": intent, "stage": "understood"}
+        if candidate.get("locked"):
+            updates["query_plan"] = {}
+        return updates
 
     try:
         intent = llm_fill_intent(question, draft)
@@ -250,5 +298,13 @@ def query_understand_node(state: JournalState) -> Dict[str, Any]:
         "llm_ok": meta_ok,
         "confidence": intent.get("confidence"),
         "threshold": CONFIDENCE_THRESHOLD,
+        "rule_candidate_rejected": bool(candidate.get("locked")),
     }
-    return {"intent": intent, "entities": entities, "stage": "understood"}
+    updates: Dict[str, Any] = {
+        "intent": intent,
+        "entities": entities,
+        "stage": "understood",
+    }
+    if candidate.get("locked"):
+        updates["query_plan"] = {}
+    return updates

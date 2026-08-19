@@ -15,9 +15,10 @@ def _paper_items(data: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     def add(paper: Dict[str, Any], **extra: Any) -> None:
         doi = paper.get("doi")
-        if not doi or doi in seen:
+        identity = (doi, extra.get("author_id")) if extra.get("author_id") else doi
+        if not doi or identity in seen:
             return
-        seen.add(doi)
+        seen.add(identity)
         papers.append({
             "type": "paper", "id": doi, "doi": doi,
             "title": paper.get("title_zh") or paper.get("title"),
@@ -72,6 +73,19 @@ def _paper_items(data: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 def _result_items(op_type: str, data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    if op_type == "paper_set_topic_summary":
+        keyword_items = [
+            {
+                "type": "keyword",
+                "id": f"keyword:{row.get('keyword')}",
+                "name": row.get("keyword"),
+                "paper_count": row.get("paper_count"),
+                "position": index,
+            }
+            for index, row in enumerate(data.get("keywords") or [], 1)
+            if isinstance(row, dict) and row.get("keyword")
+        ]
+        return keyword_items + _paper_items(data)
     if op_type in {"top_authors", "author_direction_diversity", "authors_by_keyword", "representative_authors_by_topic"}:
         return [
             {"type": "author", "id": row.get("author_id"),
@@ -89,8 +103,11 @@ def _result_items(op_type: str, data: Dict[str, Any]) -> List[Dict[str, Any]]:
             for index, row in enumerate(data.get("institutions") or [], 1)
             if isinstance(row, dict) and row.get("institution")
         ]
-    if op_type in {"top_keywords", "keyword_growth", "topic_period_compare", "author_topic_summary"}:
-        rows = data.get("keywords") or data.get("keyword_growth") or data.get("topics") or []
+    if op_type in {
+        "top_keywords", "keyword_growth", "topic_period_compare",
+        "author_topic_summary", "research_methods",
+    }:
+        rows = data.get("keywords") or data.get("keyword_growth") or data.get("topics") or data.get("methods") or []
         return [
             {"type": "keyword", "id": f"keyword:{row.get('keyword')}", "name": row.get("keyword"),
              "paper_count": row.get("paper_count") or row.get("late_count"), "position": index}
@@ -128,6 +145,14 @@ def _assess(op: Dict[str, Any], data: Dict[str, Any]) -> Tuple[str, List[str]]:
         return "unsupported", [str(data.get("reason") or contract.get("reason") or "数据源不支持该指标")]
     if contract.get("kind") == "clarification":
         return "complete", []
+    if contract.get("kind") == "notice":
+        return ("complete", []) if data.get("message") else ("partial", ["缺少数据范围说明"])
+    if contract.get("kind") == "opportunity":
+        return (
+            ("complete", [])
+            if data.get("message") and data.get("directions")
+            else ("partial", ["缺少可追溯的投稿机会依据"])
+        )
     if contract.get("kind") == "evolution":
         evolutions = data.get("authors") or [data]
         complete_authors = 0
@@ -286,6 +311,8 @@ def assess_answer_coverage(answer: str, operation_results: List[Dict[str, Any]])
         "institution_stability": ("长期高产机构", "稳定性"),
         "journal_overview": ("期刊概览", "发展历程"),
         "submission_guidance": ("投稿建议",),
+        "research_methods": ("常见研究方法", "方法相关关键词"),
+        "submission_opportunities": ("潜在投稿机会",),
     }
     rows: List[Dict[str, Any]] = []
     for result in operation_results or []:
@@ -366,7 +393,9 @@ def assess_quality(answer: str, state: JournalState) -> Dict[str, Any]:
         "top_keywords": ("热门关键词",),
         "keyword_growth": ("关键词增长", "新兴方向"),
         "topic_period_compare": ("主题阶段", "热点变化", "领域变化", "内容缺口", "预测限制"),
-        "topic_keyword_counts": ("专题发展", "主题词命中"),
+        "period_hotspot_compare": ("热点窗口对比", "热点变化"),
+        "keywords_by_periods": ("子主题的阶段变化",),
+        "topic_keyword_counts": ("专题发展", "主题词命中", "主题命中统计"),
         "topic_yearly": ("年度变化", "主题趋势", "逐年命中"),
         "top_authors": ("作者",),
         "authors_by_keyword": ("代表作者", "相关作者"),
@@ -389,6 +418,10 @@ def assess_quality(answer: str, state: JournalState) -> Dict[str, Any]:
         "coauthored_papers": ("代表论文", "合作论文"),
         "submission_fit": ("投稿", "匹配"),
         "submission_guidance": ("投稿建议",),
+        "research_methods": ("常见研究方法", "方法相关关键词"),
+        "submission_opportunities": ("潜在投稿机会",),
+        "data_scope_notice": ("数据范围说明",),
+        "clarification": ("请提供", "请补充"),
     }
     relevant_tokens = tuple(
         token

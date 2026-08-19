@@ -1462,11 +1462,51 @@ def _render_new_operation(op_type: str, data: Dict[str, Any]) -> Optional[str]:
                 f"同比 {fastest.get('yoy_pct')}%）。",
                 "",
             ]
-        for row in rows[1:]:
+        comparable = [
+            row for row in rows[1:]
+            if row.get("delta") is not None
+            and int(row.get("year") or 0) < datetime.now().year
+        ]
+        growth = sorted(comparable, key=lambda row: -int(row.get("delta") or 0))[:3]
+        decline = sorted(comparable, key=lambda row: int(row.get("delta") or 0))[:3]
+        if growth:
+            lines.append("快速增长年份：" + "、".join(
+                f"{row.get('year')}年（{int(row.get('delta') or 0):+d}篇）" for row in growth
+            ))
+        if decline:
+            lines.append("下降较快年份：" + "、".join(
+                f"{row.get('year')}年（{int(row.get('delta') or 0):+d}篇）" for row in decline
+            ))
+        lines.append("")
+        for row in comparable:
             lines.append(
                 f"- {row.get('year')}：变化 {int(row.get('delta') or 0):+d} 篇，"
                 f"同比 {row.get('yoy_pct')}%"
             )
+        lines += [
+            "",
+            "> 同比序列只能识别增长和下降阶段，不能单独证明波动原因；栏目调整、出版节奏或数据入库完整性等原因需要额外资料核验。",
+        ]
+        return "\n".join(lines)
+    if op_type == "data_scope_notice":
+        message = str(data.get("message") or "").strip()
+        return f"## 数据范围说明\n\n{message}" if message else None
+    if op_type == "clarification":
+        return str(
+            data.get("message")
+            or data.get("focus")
+            or "请补充需要查询的对象。"
+        ).strip()
+    if op_type == "topic_keyword_counts":
+        rows = data.get("topic_keywords") or []
+        if not rows:
+            return None
+        lines = ["## 主题命中统计", ""]
+        lines += [
+            f"{i}. **{row.get('keyword')}**（{row.get('paper_count')}篇）"
+            for i, row in enumerate(rows, 1)
+        ]
+        lines += ["", "> 命中口径为论文关键词字段包含所查主题。"]
         return "\n".join(lines)
     if op_type == "top_keywords":
         rows = data.get("keywords") or []
@@ -1474,6 +1514,81 @@ def _render_new_operation(op_type: str, data: Dict[str, Any]) -> Optional[str]:
             return None
         lines = ["## 热门关键词", ""]
         lines += [f"{i}. **{r.get('keyword')}**（{r.get('paper_count')}篇）" for i, r in enumerate(rows, 1)]
+        return "\n".join(lines)
+    if op_type == "paper_set_topic_summary":
+        papers = data.get("papers") or []
+        common = data.get("common_keywords") or []
+        source_count = int(data.get("source_record_count") or len(papers))
+        papers_by_doi = {str(paper.get("doi")): paper for paper in papers}
+        grouped_dois: Dict[tuple, List[str]] = {}
+        for row in data.get("paper_authors") or []:
+            doi = str(row.get("doi") or "")
+            names = tuple(sorted(
+                str(author.get("name") or author.get("author_id") or "").strip()
+                for author in row.get("authors") or []
+                if str(author.get("name") or author.get("author_id") or "").strip()
+            ))
+            if doi in papers_by_doi and names:
+                grouped_dois.setdefault(names, []).append(doi)
+
+        def subject_clues(dois: List[str]) -> List[str]:
+            clues: List[str] = []
+            for doi in dois:
+                paper = papers_by_doi.get(doi) or {}
+                title = str(paper.get("title_zh") or "")
+                candidates = []
+                for keyword in paper.get("keywords") or []:
+                    term = str(keyword or "").strip()
+                    stem = term.rstrip("属种")
+                    if term and (term in title or (len(stem) >= 2 and stem in title)):
+                        candidates.append(term)
+                if candidates:
+                    clue = max(candidates, key=len)
+                    if clue not in clues:
+                        clues.append(clue)
+            return clues[:8]
+
+        lines = [
+            "## 这些发文的主题相似性",
+            "",
+            f"分析范围：上一轮 {source_count} 条作者–论文记录，按 DOI 去重后共 {len(papers)} 篇；"
+            f"其中 {int(data.get('papers_with_keywords') or 0)} 篇有关键词标注。",
+            "",
+        ]
+        if len(grouped_dois) > 1:
+            lines += [
+                "**结论：这些论文并非围绕一个单一主题，而是形成多个组内相近、组间差异明显的研究集合。**",
+                "",
+                "### 按作者–论文归属观察的主题组",
+                "",
+            ]
+            for index, (authors, dois) in enumerate(grouped_dois.items(), 1):
+                clues = subject_clues(dois)
+                clue_text = "、".join(clues) or "题名与关键词较分散"
+                lines.append(
+                    f"{index}. **{'、'.join(authors)}相关论文**（{len(dois)}篇）："
+                    f"题名或关键词中的主要研究对象包括 {clue_text}。"
+                )
+            lines += ["", "### 精确关键词重合", ""]
+        else:
+            lines += ["### 精确关键词重合", ""]
+        if common:
+            for index, row in enumerate(common[:10], 1):
+                representatives = row.get("papers") or []
+                paper = representatives[0] if representatives else {}
+                doi = str(paper.get("doi") or "")
+                example = paper.get("title_zh") or paper.get("title")
+                suffix = f"；代表论文：{example}（DOI: {doi}）" if example and doi else ""
+                lines.append(
+                    f"{index}. **{row.get('keyword')}**：覆盖 {row.get('paper_count')}/{len(papers)} 篇"
+                    f"（{row.get('paper_share_pct')}%）{suffix}"
+                )
+        else:
+            lines.append("现有关键词字段中，没有主题词同时覆盖至少 2 篇论文。")
+        lines += [
+            "",
+            "> 主题组依据上一轮作者–DOI 归属及题名/关键词中的显式对象词归纳；精确重合按 DOI 去重计算，不等同于全文语义相似度。",
+        ]
         return "\n".join(lines)
     if op_type == "institutions_by_keyword":
         rows = data.get("institutions") or []
@@ -1495,6 +1610,84 @@ def _render_new_operation(op_type: str, data: Dict[str, Any]) -> Optional[str]:
         for i, row in enumerate(rows, 1):
             kws = "、".join(str(k.get("keyword")) for k in (row.get("keywords") or [])[:6])
             lines.append(f"{i}. **{row.get('name_zh')}**（{row.get('paper_count')}篇）：{kws}")
+        return "\n".join(lines)
+    if op_type == "keywords_by_periods":
+        periods = data.get("periods") or []
+        if not periods:
+            return None
+        topic = data.get("topic")
+        lines = [f"## {topic or '研究'}子主题的阶段变化", ""]
+        for period in periods:
+            keywords = "、".join(
+                f"{row.get('keyword')}（{row.get('paper_count')}篇）"
+                for row in (period.get("keywords") or [])[:8]
+            ) or "无足够共现关键词"
+            lines.append(
+                f"- **{period.get('start_year')}–{period.get('end_year')}**："
+                f"主题命中 {period.get('paper_count') or 0} 篇；共现子主题：{keywords}"
+            )
+        lines += ["", "> 子主题依据同篇论文的关键词共现归纳，不等同于全文语义分类。"]
+        return "\n".join(lines)
+    if op_type == "period_hotspot_compare":
+        periods = data.get("periods") or []
+        if len(periods) < 2:
+            return None
+        early, recent = periods[0], periods[1]
+        early_map = {
+            str(row.get("keyword")): int(row.get("paper_count") or 0)
+            for row in early.get("keywords") or [] if row.get("keyword")
+        }
+        recent_map = {
+            str(row.get("keyword")): int(row.get("paper_count") or 0)
+            for row in recent.get("keywords") or [] if row.get("keyword")
+        }
+        risen = [name for name in recent_map if name not in early_map]
+        fallen = [name for name in early_map if name not in recent_map]
+        lines = [
+            "## 热点窗口对比", "",
+            f"### {early.get('start_year')}–{early.get('end_year')}（{early.get('paper_count')}篇）", "",
+        ]
+        lines += [
+            f"{i}. **{row.get('keyword')}**（{row.get('paper_count')}篇）"
+            for i, row in enumerate(early.get("keywords") or [], 1)
+        ]
+        lines += ["", f"### {recent.get('start_year')}–{recent.get('end_year')}（{recent.get('paper_count')}篇）", ""]
+        lines += [
+            f"{i}. **{row.get('keyword')}**（{row.get('paper_count')}篇）"
+            for i, row in enumerate(recent.get("keywords") or [], 1)
+        ]
+        lines += ["", "### 热点变化", ""]
+        lines.append("- 近窗新进 Top 列表：" + ("、".join(risen) or "无"))
+        lines.append("- 前窗特有、近窗退出 Top 列表：" + ("、".join(fallen) or "无"))
+        lines += [
+            "", "> 对比按两个十年窗口的关键词论文数排名；"
+            f"{datetime.now().year}年为未完年，近窗结果需谨慎解读。",
+        ]
+        return "\n".join(lines)
+    if op_type == "research_methods":
+        rows = data.get("methods") or []
+        if not rows:
+            return None
+        lines = ["## 常见研究方法线索", ""]
+        lines += [
+            f"{i}. **{row.get('keyword')}**（{row.get('paper_count')}篇）"
+            for i, row in enumerate(rows, 1)
+        ]
+        lines += ["", "> 这是方法相关关键词频次，不等同于对每篇论文实验方法的全文标注。"]
+        return "\n".join(lines)
+    if op_type == "submission_opportunities":
+        directions = data.get("directions") or []
+        methods = data.get("methods") or []
+        if not directions:
+            return None
+        direction_text = "、".join(str(row.get("keyword")) for row in directions if row.get("keyword"))
+        method_text = "、".join(str(row.get("keyword")) for row in methods if row.get("keyword"))
+        lines = [
+            "## 潜在投稿机会", "",
+            f"- 近期高频方向：{direction_text or '暂无足够证据'}",
+            f"- 可结合的方法线索：{method_text or '暂无足够证据'}",
+            f"- {data.get('message')}",
+        ]
         return "\n".join(lines)
     if op_type == "keyword_growth":
         rows = data.get("keyword_growth") or []
@@ -1634,11 +1827,35 @@ def _render_new_operation(op_type: str, data: Dict[str, Any]) -> Optional[str]:
             title = paper.get("title_zh") or paper.get("title") or "（无题名）"
             doi = str(paper.get("doi") or "")
             link = doi_url(doi)
+            keywords = "、".join(str(value) for value in (paper.get("keywords") or [])[:6] if value)
             lines.append(
                 f"{i}. **{title}**（{paper.get('year')}）；DOI: {doi}"
+                + (f"；研究主题：{keywords}" if keywords else "；研究主题：现有关键词字段未标注")
                 + (f"；[查看全文]({link})" if link else "")
             )
         return _ensure_ordered_list_markdown("\n".join(lines))
+    if op_type in {"papers_for_authors", "present_resultset"}:
+        groups = data.get("authors") or []
+        lines = ["## 作者具体论文", ""]
+        for group in groups:
+            label = group.get("name_zh") or group.get("name_en") or group.get("author_id") or "相关作者"
+            papers = group.get("papers") or []
+            lines += [f"### {label}（{len(papers)}篇）", ""]
+            for index, paper in enumerate(papers, 1):
+                title = paper.get("title_zh") or paper.get("title") or "（无题名）"
+                doi = str(paper.get("doi") or "")
+                link = doi_url(doi)
+                suffix = f"；DOI: {doi}" if doi else ""
+                if link:
+                    suffix += f"；[查看全文]({link})"
+                lines.append(f"{index}. **{title}**（{paper.get('year')}）{suffix}")
+            lines.append("")
+        if data.get("has_more"):
+            lines += [
+                f"> 内容较长，已展示 {int(data.get('shown_count') or 0)}/"
+                f"{int(data.get('total_count') or 0)} 条。输入“继续”可列出剩余论文。"
+            ]
+        return "\n".join(lines).strip() if len(lines) > 2 else None
     if op_type in {"topic_papers", "representative_papers_by_topic", "author_papers", "representative_papers_by_institution"}:
         groups = data.get("topics") or data.get("authors") or data.get("institutions") or []
         title = "作者论文" if op_type == "author_papers" else (

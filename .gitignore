@@ -22,6 +22,7 @@ Q_results.md
 data/*.db-shm
 data/*.db-wal
 data/*.db-*
+data/conversations.db
 !data/journal.db
 
 /cleaned/
@@ -41,3 +42,8 @@ data/*.db-*
 !/eval/run_eval1_nxb.py
 !/eval/core_user_tasks_specs.json
 !/eval/run_core_user_tasks.py
+!/eval/run_langsmith_eval.py
+!/eval/mvp_eval_specs_v1.json
+!/eval/run_mvp_eval.py
+!/eval/MVP_EVAL_V1.md
+!/eval/mvp_human_scores_v1.csv

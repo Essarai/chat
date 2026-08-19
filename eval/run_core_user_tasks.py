@@ -22,7 +22,7 @@ from app.agents.generate import ensure_answer_operation_coverage, try_operation_
 from app.capabilities.sql_capability import execute_plan  # noqa: E402
 from app.config import get_corpus_settings  # noqa: E402
 from app.services.minimax_chat import MiniMaxChat  # noqa: E402
-from app.services.orchestrator import ChatOrchestrator  # noqa: E402
+from app.services.production_orchestrator import ChatOrchestrator  # noqa: E402
 from app.services.sqlite_repo import SQLiteRepo  # noqa: E402
 
 

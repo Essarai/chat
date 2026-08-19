@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f4f6fa" />
+    <title>创建生产任务 · 刊行</title>
+    <link rel="stylesheet" href="/static/production-task.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="主导航">
+        <a class="brand" href="#" aria-label="刊行首页">
+          <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span><b>刊行</b><small>Journal Flow</small></span>
+        </a>
+
+        <nav class="side-nav">
+          <p>生产管理</p>
+          <a href="#">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5v13a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18.5zM8 8h8M8 12h5M8 16h7"/></svg>
+            生产任务
+            <span class="nav-count">12</span>
+          </a>
+          <a class="active" href="#" aria-current="page">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+            创建任务
+          </a>
+          <a href="#">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5"/></svg>
+            待处理稿件
+            <span class="nav-count warning">4</span>
+          </a>
+          <p>资源中心</p>
+          <a href="#">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h6l2 2h8v10H4z"/></svg>
+            文件管理
+          </a>
+          <a href="#">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg>
+            操作记录
+          </a>
+        </nav>
+
+        <div class="side-help">
+          <span class="help-icon">?</span>
+          <div><b>需要帮助？</b><small>查看生产操作指南</small></div>
+          <span aria-hidden="true">↗</span>
+        </div>
+      </aside>
+
+      <div class="workspace">
+        <header class="topbar">
+          <div class="journal-select">
+            <span class="journal-monogram">浙</span>
+            <div><small>当前期刊</small><strong>浙江大学学报（农业与生命科学版）</strong></div>
+            <button type="button" aria-label="切换期刊">⌄</button>
+          </div>
+          <div class="top-actions">
+            <button class="icon-button" type="button" aria-label="通知">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>
+              <i></i>
+            </button>
+            <span class="top-divider"></span>
+            <button class="user-menu" type="button">
+              <span class="avatar">林</span>
+              <span><strong>林编辑</strong><small>责任编辑</small></span>
+              <span aria-hidden="true">⌄</span>
+            </button>
+          </div>
+        </header>
+
+        <main>
+          <nav class="breadcrumb" aria-label="面包屑"><a href="#">生产任务</a><span>/</span><span>创建生产任务</span></nav>
+
+          <section class="page-heading">
+            <div>
+              <span class="page-kicker">NEW PRODUCTION</span>
+              <h1>创建生产任务</h1>
+              <p>上传稿件后，系统将自动识别文章、整理正文文件并提取元数据。</p>
+            </div>
+            <div class="draft-state"><i></i> 草稿已自动保存 <time id="saved-time">刚刚</time></div>
+          </section>
+
+          <ol class="process-track" aria-label="创建生产任务流程">
+            <li class="active" data-step="1">
+              <button class="step-nav" type="button" aria-current="step"><span>1</span><div><b>选择类型</b><small>确定发布阶段</small></div></button>
+            </li>
+            <li data-step="2">
+              <button class="step-nav" type="button"><span>2</span><div><b>上传与识别</b><small>整理文章文件</small></div></button>
+            </li>
+            <li data-step="3">
+              <button class="step-nav" type="button"><span>3</span><div><b>校对信息</b><small>确认文章信息</small></div></button>
+            </li>
+            <li data-step="4">
+              <button class="step-nav" type="button"><span>4</span><div><b>确认创建</b><small>核对并提交任务</small></div></button>
+            </li>
+          </ol>
+
+          <div class="wizard-stage is-active" data-step-panel="1">
+          <section class="panel publish-panel stage-panel" aria-labelledby="publish-title">
+            <div class="section-heading">
+              <span class="section-index">01</span>
+              <div><h2 id="publish-title">选择发布类型</h2><p>不同类型对应不同的文章信息要求。</p></div>
+            </div>
+            <div class="publication-options" role="radiogroup" aria-label="发布类型">
+              <label class="publication-card selected">
+                <input type="radio" name="publication" value="formal" checked />
+                <span class="radio-ui"></span>
+                <span class="publication-icon blue">
+                  <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5"/></svg>
+                </span>
+                <span class="publication-copy"><strong>正式出版</strong><small>适用于已正式出版的文章，如年刊文章即时录入。请上传正式出版文件，经加工审核后上线，预计 3–5 个工作日。</small></span>
+                <em>常用</em>
+              </label>
+              <label class="publication-card">
+                <input type="radio" name="publication" value="online" />
+                <span class="radio-ui"></span>
+                <span class="publication-icon cyan">
+                  <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M4 12h16M12 4a13 13 0 0 1 0 16M12 4a13 13 0 0 0 0 16"/></svg>
+                </span>
+                <span class="publication-copy"><strong>优先出版</strong><small>适用于需要优先上线的文章。请上传终稿文件，经加工审核后上线，预计 3–5 个工作日。</small></span>
+              </label>
+              <label class="publication-card">
+                <input type="radio" name="publication" value="accepted" />
+                <span class="radio-ui"></span>
+                <span class="publication-icon violet">
+                  <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M7 4h8l3 3v13H7zM14 4v4h4M10 13l2 2 4-5"/></svg>
+                </span>
+                <span class="publication-copy"><strong>最新录用</strong><small>适用于希望实时上线的文章。请上传文章文件，并填写标题、作者、摘要等信息，无需加工，提交审核后即可上线。</small></span>
+              </label>
+            </div>
+          </section>
+          </div>
+
+          <div class="wizard-stage" data-step-panel="2" hidden>
+          <section class="panel upload-panel stage-panel" aria-labelledby="upload-title">
+            <div class="section-heading">
+              <span class="section-index">02</span>
+              <div><h2 id="upload-title">上传文章文件</h2><p>支持多选。系统会按文章标题将不同格式正文归到同一篇文章。</p></div>
+              <button id="demo-button" class="text-button" type="button">重新加载示例文件</button>
+            </div>
+
+            <label class="dropzone" id="dropzone">
+              <input id="body-file-input" type="file" accept=".pdf,.doc,.docx,.tex,.xml" multiple />
+              <span class="upload-illustration" aria-hidden="true">
+                <svg viewBox="0 0 48 48"><path d="M13 35h22a8 8 0 0 0 1-15.9A12 12 0 0 0 13.2 17 9 9 0 0 0 13 35Z"/><path d="M24 30V15M18.5 20.5 24 15l5.5 5.5"/></svg>
+              </span>
+              <span><strong>拖拽文件到这里，或 <u>选择文件</u></strong><small>支持 PDF、Word、LaTeX、XML，可一次上传多篇文章 · 单个文件不超过 100 MB</small></span>
+            </label>
+
+            <div id="recognition-status" class="recognition-status success" aria-live="polite">
+              <span class="status-symbol">
+                <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m6 12 4 4 8-9"/></svg>
+              </span>
+              <div><strong>自动归组完成</strong><p>已识别 <b id="file-count">6</b> 个文件并归为 <b id="article-count">2</b> 篇文章，请检查归组结果。</p></div>
+              <button id="status-detail-button" type="button">查看识别说明</button>
+            </div>
+            <div id="recognition-detail" class="recognition-detail" hidden>
+              <span>识别依据</span> 系统会清理文件名中的格式后缀和版本标记，再匹配相似标题；低置信度文件将标记为“需确认”。你可以在文件右侧手动更改所属文章。
+            </div>
+          </section>
+          <aside class="stage-tip">
+            <span>提示</span>
+            <p>文件识别完成后，可进入下一步调整归组。正文文件不会在切换步骤时丢失。</p>
+          </aside>
+          </div>
+
+          <div class="wizard-stage" data-step-panel="3" hidden>
+          <section class="articles-section stage-panel" aria-labelledby="article-list-title">
+            <div class="article-section-head">
+              <div class="section-heading compact">
+                <span class="section-index">03</span>
+                <div><h2 id="article-list-title">校对文章与文件</h2><p id="article-subtitle">检查文章标题和正文归组，可为每篇文章添加附件。</p></div>
+              </div>
+              <div class="article-tools">
+                <span id="article-summary"><b>2</b> 篇文章 · <b>6</b> 个正文 · <b>2</b> 个附件</span>
+                <button id="add-article-button" class="secondary-button" type="button">
+                  <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>新建空白文章
+                </button>
+              </div>
+            </div>
+            <div id="article-list" class="article-list"></div>
+          </section>
+          </div>
+
+          <div class="wizard-stage" data-step-panel="4" hidden>
+            <section class="confirmation-panel stage-panel" aria-labelledby="confirmation-title">
+              <div class="confirmation-heading">
+                <span class="confirmation-check" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><path d="m6 12 4 4 8-9"/></svg>
+                </span>
+                <div><span class="page-kicker">READY TO CREATE</span><h2 id="confirmation-title">确认生产任务</h2><p>请最后核对发布类型与文章清单，确认后任务将进入生产流程。</p></div>
+              </div>
+              <div id="confirmation-summary" class="confirmation-summary"></div>
+            </section>
+          </div>
+        </main>
+
+        <footer class="action-bar">
+          <div class="validation-note">
+            <span id="validation-icon">✓</span>
+            <p><strong id="validation-title">所有必填信息已完整</strong><small id="validation-copy">创建后，2 篇文章将进入正式出版生产流程。</small></p>
+          </div>
+          <div>
+            <button id="back-button" class="secondary-button" type="button" hidden><span>←</span> 上一步</button>
+            <button id="save-button" class="secondary-button" type="button">保存草稿</button>
+            <button id="create-button" class="primary-button" type="button">下一步：上传文件 <span>→</span></button>
+          </div>
+        </footer>
+      </div>
+    </div>
+
+    <div id="toast-region" class="toast-region" aria-live="polite"></div>
+    <input id="attachment-input" type="file" multiple hidden />
+    <script src="/static/production-task.js"></script>
+  </body>
+</html>

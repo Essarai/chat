@@ -56,6 +56,76 @@ def plan_from_intent(intent: Dict[str, Any], question: str = "") -> Optional[Dic
     notes = str(intent.get("notes") or "")
     q = question or ""
 
+    requested = [
+        str(item.get("type") if isinstance(item, dict) else item).strip()
+        for item in (intent.get("requested_operations") or [])
+    ]
+    requested = [item for item in requested if item]
+    if requested:
+        from app.agents.operation_contracts import CONTRACTS
+
+        known = [item for item in requested if item in CONTRACTS]
+        topic_required = {
+            "topic_yearly", "topic_keyword_counts", "topic_papers",
+            "authors_by_keyword", "institutions_by_keyword", "topic_coverage",
+        }
+        incompatible = {item for item in known if item in topic_required and not topics}
+        known = [item for item in known if item not in incompatible]
+        # A topic trend with no named topic means journal-wide composition
+        # change. Reconcile the proposal to executable capabilities instead of
+        # running a topic operation with an empty topic list.
+        if (
+            incompatible
+            and op == "trend"
+            and entity in {"topic", "journal", "paper"}
+            and intent.get("metric") == "keyword_freq"
+        ):
+            for item in (
+                "top_keywords", "keyword_growth", "topic_period_compare",
+                "representative_papers_by_topic",
+            ):
+                if item not in known:
+                    known.append(item)
+        if known:
+            known_set = set(known)
+            if {"top_keywords", "keyword_growth", "topic_period_compare"}.issubset(known_set):
+                inferred_task = "hotspot_compare"
+            elif "author_profile" in known_set:
+                inferred_task = "author_profile"
+            elif "top_authors" in known_set:
+                inferred_task = "top_authors"
+            elif "submission_fit" in known_set:
+                inferred_task = "submission_fit"
+            else:
+                inferred_task = known[0]
+            task = str(intent.get("legacy_task") or inferred_task)
+            return {
+                "task": task,
+                "main_task": task,
+                "sources": list(dict.fromkeys(
+                    "kg" if item in {"keyword_ego", "author_ego", "paper_neighborhood"}
+                    else "rag" if item == "semantic_search"
+                    else "sql"
+                    for item in known
+                )),
+                "sql_ops": [
+                    item for item in known
+                    if item not in {"keyword_ego", "author_ego", "paper_neighborhood", "semantic_search"}
+                ],
+                "kg_ops": [item for item in known if item in {"keyword_ego", "author_ego", "paper_neighborhood"}],
+                "rag_queries": [q] if "semantic_search" in known else [],
+                "year_start": y0,
+                "year_end": y1,
+                "top_n": int(top_n or 10),
+                "author_name": author,
+                "author_name_b": author_b,
+                "institution": institution,
+                "keywords": topics,
+                "focus": notes or "按语义理解得到的操作计划查询并回答。",
+                "complexity": "complex" if len(sources) > 1 else "simple",
+                "plan_source": "schema",
+            }
+
     if goal == "refuse" or intent.get("legacy_task") == "unsupported_citations":
         return {
             "task": "unsupported_citations",

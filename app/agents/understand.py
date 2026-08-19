@@ -10,6 +10,7 @@ from app.config import get_settings
 from app.services.minimax_chat import MiniMaxChat
 
 YEAR_RANGE_RE = re.compile(r"(?:近|最近|过去|前)\s*(\d{1,2})\s*年")
+YEAR_WITHIN_RE = re.compile(r"(\d{1,2})\s*年内")
 YEAR_RANGE_CN_RE = re.compile(
     r"(?:近|最近|过去|前)\s*(两|二|三|四|五|六|七|八|九|十|十五|二十)\s*年"
 )
@@ -100,6 +101,11 @@ def extract_year_window(question: str, default_last_n: Optional[int] = None):
         n = int(m.group(1))
         end = datetime.now().year
         return end - n + 1, end
+    m = YEAR_WITHIN_RE.search(question or "")
+    if m:
+        n = int(m.group(1))
+        end = datetime.now().year
+        return end - n + 1, end
     m = YEAR_RANGE_CN_RE.search(question or "")
     if m:
         n = _CN_YEAR_N.get(m.group(1))
@@ -180,6 +186,12 @@ _BAD_AUTHOR_NAMES = {
 
 def _looks_like_person_name(name: str) -> bool:
     if not name or name in _BAD_AUTHOR_NAMES:
+        return False
+    if re.search(
+        r"哪些|什么|谁|多少|几位|是否|有没有|有无|年度|影响力|分析|这些|"
+        r"某位|指定|论文|引用|次数|最高|年内|接受|收录",
+        name,
+    ):
         return False
     if name.endswith("年") or re.match(r"^近\d", name):
         return False

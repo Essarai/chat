@@ -28,11 +28,23 @@ def _new_question_signal(question: str) -> bool:
 
 def _top_n(question: str, default: int = 10) -> int:
     match = re.search(r"(?:Top|前)\s*(\d{1,2})", question or "", re.I)
-    return max(1, min(int(match.group(1)), 50)) if match else default
+    if not match:
+        match = re.search(r"(?:推荐|列出|找出)\s*(\d{1,2})\s*个", question or "")
+    if match:
+        return max(1, min(int(match.group(1)), 50))
+    cn_match = re.search(
+        r"([\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341\u4e24])\s*个?(?:研究)?(?:方向|主题|领域)",
+        question or "",
+    )
+    return _CN_NUM.get(cn_match.group(1), default) if cn_match else default
 
 
 def _selection_count(question: str) -> Optional[int]:
-    match = re.search(r"前\s*(\d{1,2}|[一二三四五六七八九十两])\s*(?:位|名|个)(?:作者)?", question or "")
+    match = re.search(
+        r"前\s*(\d{1,2}|[一二三四五六七八九十两])\s*"
+        r"(?:(?:位|名|个)(?:作者)?|(?:的)?作者)",
+        question or "",
+    )
     if not match:
         return None
     raw = match.group(1)
@@ -44,7 +56,7 @@ def _clarification_plan(message: str, action: str = "select") -> Dict[str, Any]:
         "task": "clarification",
         "action": action,
         "sources": ["sql"],
-        "sql_ops": [],
+        "sql_ops": ["clarification"],
         "locked": True,
         "focus": message,
     }
@@ -53,6 +65,27 @@ def _clarification_plan(message: str, action: str = "select") -> Dict[str, Any]:
 def _structured_new_question(question: str) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
     """Zero-model path for high-confidence product task families."""
     q = question or ""
+    if re.search(r"某位作者|指定作者", q) and not re.search(
+        r"[一-龥]{2,4}(?:老师|教授|研究员)", q
+    ):
+        message = "请提供需要分析的具体作者姓名，例如“徐建明”。"
+        from app.agents.operation_contracts import normalize_query_plan
+
+        plan = normalize_query_plan(_clarification_plan(message, action="query"), q)
+        plan["locked"] = True
+        return {
+            "kind": "ambiguous", "action": "query", "target_turn_id": None,
+            "target_entity": "author", "selector": None, "explicit_constraints": {},
+            "confidence": 1.0, "needs_clarification": True,
+            "clarification": message, "source": "deterministic-core",
+        }, plan
+
+    author = extract_author_name(q)
+    from app.agents.understand import extract_author_pair
+    pair = extract_author_pair(q)
+    author_b = pair[1] if pair else None
+    if pair:
+        author = pair[0]
     ranking = bool(
         re.search(r"作者", q)
         and re.search(r"发文最多|发文量|高产|排名|前\s*\d+", q)
@@ -71,7 +104,7 @@ def _structured_new_question(question: str) -> Tuple[Optional[Dict[str, Any]], O
         and re.search(r"高产|发文|论文|作者|合作|关系|排名|最多", q)
     )
     author_detail = bool(
-        re.search(r"[一-龥A-Za-z·]{2,4}", q)
+        (author or author_b)
         and re.search(r"发表过|论文|发文|研究方向|研究主题|合作伙伴|合作者|研究团队", q)
     )
     topic_analysis = bool(
@@ -89,6 +122,31 @@ def _structured_new_question(question: str) -> Tuple[Optional[Dict[str, Any]], O
     submission = bool(
         re.search(r"适合.{0,20}投稿|是否有相关论文|推荐.{0,12}相关研究", q)
         and re.search(r"研究方向|论文主题|方向投稿|相关论文|相关研究", q)
+    )
+    unsupported_citations = bool(re.search(r"被引用|引用次数|高被引|被引次数|citation", q, re.I))
+    international_collaboration = bool(
+        re.search(r"国际合作|跨国合作|哪些国家", q)
+        and re.search(r"合作|国家|机构", q)
+    )
+    topic_paper_classification = bool(
+        re.search(r"标题|关键词", q)
+        and re.search(r"包含", q)
+        and re.search(r"按照.*(?:方向|主题).*分类|分类", q)
+    )
+    submission_research = bool(
+        re.search(r"投稿前调研|潜在投稿机会", q)
+        and re.search(r"热门方向|研究方法|投稿机会", q)
+    )
+    period_hotspot_compare = bool(
+        re.search(r"近\s*(?:\d+|[一二三四五六七八九十两]+)\s*年", q)
+        and re.search(r"前\s*(?:\d+|[一二三四五六七八九十两]+)\s*年", q)
+        and re.search(r"热点|研究方向|主题", q)
+        and re.search(r"比较|对比|变化|差异", q)
+    )
+    field_evolution = bool(
+        re.search(r"(?:接受|收录)\s*(?:文章|论文)", q)
+        and re.search(r"领域|方向|主题", q)
+        and re.search(r"变化|演变|变迁|趋势", q)
     )
     core = bool(
         re.search(
@@ -115,6 +173,12 @@ def _structured_new_question(question: str) -> Tuple[Optional[Dict[str, Any]], O
             network_or_diversity,
             journal_summary,
             submission,
+            unsupported_citations,
+            international_collaboration,
+            topic_paper_classification,
+            submission_research,
+            period_hotspot_compare,
+            field_evolution,
             core,
         )
     ):
@@ -124,20 +188,58 @@ def _structured_new_question(question: str) -> Tuple[Optional[Dict[str, Any]], O
     if y0 is None and re.search(r"近年|最近几年", q):
         y1 = datetime.now().year
         y0 = y1 - 4
-    author = extract_author_name(q)
-    author_b = None
-    from app.agents.understand import extract_author_pair
-    pair = extract_author_pair(q)
-    if pair:
-        author, author_b = pair
+    if publication_trend or unsupported_citations or international_collaboration or field_evolution or (
+        re.search(r"研究团队", q) and re.search(r"影响力|核心|方向.*变化", q)
+    ):
+        author, author_b = None, None
     institution = None
     match = re.search(r"([一-龥]{2,20}(?:大学|学院|研究院|研究所|科学院))", q)
     if match:
         institution = match.group(1)
     from app.agents.intent_schema import _seed_topics_from_question
     topics = _seed_topics_from_question(q)
+    if re.search(r"农业人工智能|农业.{0,3}(?:AI|ai)", q):
+        # 「人工智能」在农业期刊中仍可命中食品/营养论文；用农业场景中的
+        # 主流技术词构成可追溯的相邻检索口径，避免将无关论文归入「农业 AI」。
+        topics = ["深度学习", "机器学习", "机器视觉", "智能农业", "农业机器人"]
 
-    if ranking and not core:
+    rag_queries: List[str] = []
+    extra_plan: Dict[str, Any] = {}
+    if unsupported_citations:
+        task, initial_ops = "unsupported_citations", ["unsupported_citations"]
+    elif period_hotspot_compare:
+        task, initial_ops = "period_hotspot_compare", ["period_hotspot_compare"]
+    elif field_evolution:
+        task, initial_ops = "field_evolution", [
+            "yearly_counts", "top_keywords", "keyword_growth", "topic_period_compare",
+            "representative_papers_by_topic",
+        ]
+    elif submission_research:
+        task, initial_ops = "submission_research", [
+            "top_keywords", "papers_by_top_keywords", "research_methods",
+            "submission_opportunities",
+        ]
+        extra_plan["top_n_directions"] = 3
+    elif international_collaboration:
+        task, initial_ops = "international_collaboration", [
+            "data_scope_notice", "top_institutions", "institution_network"
+        ]
+    elif re.search(r"中国作者", q) and re.search(r"机构", q):
+        task, initial_ops = "top_institutions", ["data_scope_notice", "top_institutions"]
+    elif re.search(r"研究团队", q) and re.search(r"影响力|核心", q) and re.search(r"方向|变化", q):
+        task, initial_ops = "top_teams", [
+            "data_scope_notice", "top_authors", "papers_for_authors",
+            "author_direction_evolution", "author_collaborators"
+        ]
+        extra_plan["max_items"] = 40
+    elif topic_paper_classification:
+        task, initial_ops = "topic_paper_classification", ["topic_papers", "papers_by_top_keywords"]
+        extra_plan["expand_topic_directions"] = True
+        extra_plan["top_n_directions"] = 5
+        extra_plan["max_items"] = 30
+    elif ranking and re.search(r"机构|单位", q):
+        task, initial_ops = "top_institutions", ["top_institutions"]
+    elif ranking and not core:
         task, initial_ops = "top_authors", ["top_authors"]
     elif publication_trend:
         task, initial_ops = "yearly_growth", ["yearly_counts", "yoy_growth"]
@@ -158,9 +260,35 @@ def _structured_new_question(question: str) -> Tuple[Optional[Dict[str, Any]], O
     elif journal_summary:
         task, initial_ops = "journal_overview", ["journal_overview"]
     elif topics and re.search(r"趋势|发展|变化|演变", q):
-        task, initial_ops = "topic_evolution", ["topic_keyword_counts", "topic_yearly"]
+        task, initial_ops = "topic_evolution", [
+            "topic_keyword_counts", "topic_yearly", "keywords_by_periods"
+        ]
     else:
         task, initial_ops = "generic", []
+    explicit_rule_match = any(
+        (
+            ranking,
+            publication_trend,
+            direction_rank,
+            institution_task,
+            author_detail,
+            topic_analysis,
+            network_or_diversity,
+            journal_summary,
+            submission,
+            unsupported_citations,
+            international_collaboration,
+            topic_paper_classification,
+            submission_research,
+            period_hotspot_compare,
+            field_evolution,
+        )
+    )
+    rule_confidence = 0.98 if explicit_rule_match and task != "generic" else 0.55
+    if re.search(r"农业人工智能|农业.{0,3}(?:AI|ai)", q):
+        initial_ops = ["data_scope_notice"] + [
+            operation for operation in initial_ops if operation != "data_scope_notice"
+        ]
     base = {
         "task": task,
         "main_task": task,
@@ -168,6 +296,7 @@ def _structured_new_question(question: str) -> Tuple[Optional[Dict[str, Any]], O
         "targets": [],
         "sources": ["sql"],
         "sql_ops": initial_ops,
+        "rag_queries": rag_queries,
         "year_start": y0,
         "year_end": y1,
         "top_n": _top_n(q),
@@ -177,14 +306,16 @@ def _structured_new_question(question: str) -> Tuple[Optional[Dict[str, Any]], O
         "keywords": topics,
         "complexity": "simple",
         "plan_source": "deterministic",
+        "rule_confidence": rule_confidence,
         "locked": True,
         "focus": "按期刊问答核心任务规格逐项查询并验收证据。",
+        **extra_plan,
     }
     from app.agents.operation_contracts import normalize_query_plan
 
     plan = normalize_query_plan(base, q)
     plan["locked"] = True
-    if journal_summary or publication_trend:
+    if journal_summary or publication_trend or field_evolution:
         target_entity = "journal"
     elif institution:
         target_entity = "institution"
@@ -206,7 +337,7 @@ def _structured_new_question(question: str) -> Tuple[Optional[Dict[str, Any]], O
         "target_entity": target_entity,
         "selector": {"top_n": _top_n(q)} if ranking else None,
         "explicit_constraints": {"year_start": plan.get("year_start"), "year_end": plan.get("year_end")},
-        "confidence": 0.98,
+        "confidence": rule_confidence,
         "needs_clarification": False,
         "source": "deterministic-core",
     }
@@ -269,6 +400,61 @@ def understand_contextual_turn(
     continuation = dict(previous_turn.get("continuation") or {})
 
     papers = [item for item in items if item.get("type") == "paper" and item.get("doi")]
+    if (
+        papers
+        and re.search(r"(?:这些|上述|其|该批).{0,8}(?:论文|发文|文章)", q)
+        and re.search(r"主题|方向|关键词|相似|共性|共同点|重合", q)
+    ):
+        paper_by_doi: Dict[str, Dict[str, Any]] = {}
+        paper_authors: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        for item in papers:
+            doi = str(item["doi"])
+            paper_by_doi.setdefault(doi, item)
+            author_id = str(item.get("author_id") or "").strip()
+            author_name = str(item.get("author_name") or "").strip()
+            if author_id or author_name:
+                key = author_id or f"name:{author_name}"
+                paper_authors.setdefault(doi, {})[key] = {
+                    "author_id": author_id or None,
+                    "name": author_name or author_id,
+                }
+        unique_papers = list(paper_by_doi.values())
+        intent = {
+            "kind": "followup",
+            "action": "summarize",
+            "target_turn_id": previous_turn.get("turn_id"),
+            "target_entity": "paper",
+            "selector": {"scope": "all"},
+            "explicit_constraints": {},
+            "inherited_constraints": constraints,
+            "confidence": 1.0,
+            "needs_clarification": False,
+            "source": "context",
+        }
+        return intent, {
+            "task": "paper_set_topic_summary",
+            "main_task": "paper_set_topic_summary",
+            "action": "summarize",
+            "targets": unique_papers,
+            "dois": [paper["doi"] for paper in unique_papers],
+            "paper_authors": [
+                {"doi": doi, "authors": list(paper_authors.get(doi, {}).values())}
+                for doi in paper_by_doi
+            ],
+            "source_record_count": len(papers),
+            "constraints": constraints,
+            "sources": ["sql"],
+            "operations": ["paper_set_topic_summary"],
+            "sql_ops": ["paper_set_topic_summary"],
+            "year_start": constraints.get("year_start"),
+            "year_end": constraints.get("year_end"),
+            "keywords": [],
+            "top_n": 20,
+            "complexity": "simple",
+            "plan_source": "conversation",
+            "locked": True,
+            "focus": "仅归纳上一轮论文集合的关键词主题及其重合度。",
+        }
     if papers and re.search(r"这些|上述|其", q) and re.search(r"按.*年|年份.*排序|时间.*排序", q):
         ordered = sorted(
             papers,
@@ -366,9 +552,14 @@ def understand_contextual_turn(
     authors = [item for item in items if item.get("type") == "author" and item.get("id")]
     ordinal = _ordinal(q)
     selection_count = _selection_count(q)
+    paper_noun = bool(re.search(r"论文|发文|文章|文献", q))
     asks_papers = bool(
-        re.search(r"展开|具体|详细|列(?:出|一下|一列)?|查看|给出|罗列|展示", q)
-        and (re.search(r"论文|发文|文章|文献", q) or (ordinal and "作者" in q))
+        (paper_noun and (
+            re.search(r"展开|具体|详细|列(?:出|一下|一列)?|查看|给出|罗列|展示|有哪些|什么", q)
+            or ordinal
+            or selection_count
+        ))
+        or (ordinal and "作者" in q)
     )
     if authors and asks_papers:
         selected = authors

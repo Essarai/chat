@@ -1,3 +1,5 @@
+"""Production facade backed exclusively by the unified pipeline."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -6,23 +8,13 @@ from typing import Any, Dict, Iterator, List, Optional
 
 from langsmith import traceable
 
-from app.agents.controller import prepare_journal_agent, reset_agent_thread, run_journal_agent
-from app.agents.fusion import finalize_answer, stream_generate
 from app.agents.understand import extract_year_window, regex_extract
 from app.capabilities import kg_capability, rag_capability, sql_capability
 from app.config import Settings, bind_corpus, get_settings
+from app.pipeline.production import UnifiedProductionPipeline
 from app.services.minimax_chat import MiniMaxChat
 from app.services.neo4j_repo import Neo4jRepo
 from app.services.sqlite_repo import SQLiteRepo
-
-
-def _attach_answer_quality(state: Dict[str, Any], answer: str) -> None:
-    from app.agents.coverage import assess_answer_coverage, assess_quality
-
-    state["answer_coverage"] = assess_answer_coverage(
-        answer, state.get("operation_results") or []
-    )
-    state["quality_report"] = assess_quality(answer, state)  # type: ignore[arg-type]
 
 
 @dataclass
@@ -40,7 +32,6 @@ class AskResult:
 
 
 def _trace_ask_inputs(inputs: Dict[str, Any]) -> Dict[str, Any]:
-    """Keep traces useful without duplicating full conversation state."""
     previous = inputs.get("previous_turn") or {}
     return {
         "question": inputs.get("question"),
@@ -68,40 +59,49 @@ def _trace_ask_output(result: AskResult) -> Dict[str, Any]:
 
 
 def _reduce_stream_trace(events: List[Dict[str, Any]]) -> Dict[str, Any]:
-    done = next((event for event in reversed(events) if event.get("type") == "done"), None)
+    done = next(
+        (event for event in reversed(events) if event.get("type") == "done"),
+        None,
+    )
     if done:
         return {
             "answer": done.get("answer") or "",
             "evidence": done.get("evidence") or {},
             "truncated": bool(done.get("truncated")),
         }
-    error = next((event for event in reversed(events) if event.get("type") == "error"), None)
+    error = next(
+        (event for event in reversed(events) if event.get("type") == "error"),
+        None,
+    )
     return error or {"status": "stream_closed_without_result"}
 
 
-class ChatOrchestrator:
-    """Facade over Controller Agent pipeline + capability helpers."""
+class ProductionOrchestrator:
+    """Stable API facade; no dependency on the deprecated agent controller."""
 
     def __init__(
         self,
-        settings: Settings | None = None,
-        chat: MiniMaxChat | None = None,
-    ):
+        settings: Optional[Settings] = None,
+        chat: Optional[MiniMaxChat] = None,
+        pipeline: Optional[UnifiedProductionPipeline] = None,
+    ) -> None:
         self.settings = settings or get_settings()
         self.chat = chat or MiniMaxChat(self.settings)
-        self._db: SQLiteRepo | None = None
-        self._neo4j: Neo4jRepo | None = None
+        self.pipeline = pipeline or UnifiedProductionPipeline(
+            self.settings,
+            chat=self.chat,
+        )
+        self._db: Optional[SQLiteRepo] = None
+        self._neo4j: Optional[Neo4jRepo] = None
 
     @property
     def db(self) -> SQLiteRepo:
-        """SQLite repo for /trends APIs (lazy)."""
         if self._db is None:
             self._db = SQLiteRepo(self.settings)
         return self._db
 
     @property
     def neo4j(self) -> Neo4jRepo:
-        """Neo4j repo for /graph APIs (lazy)."""
         if self._neo4j is None:
             self._neo4j = Neo4jRepo(self.settings)
         return self._neo4j
@@ -117,9 +117,7 @@ class ChatOrchestrator:
             top_k=top_k,
             journal_id=self.settings.journal_id,
         )
-        data = result.get("data") or {}
-        hits = data.get("hits") or []
-        return hits
+        return (result.get("data") or {}).get("hits") or []
 
     def trends(self, question: str = "") -> Dict[str, Any]:
         self._bind()
@@ -140,68 +138,93 @@ class ChatOrchestrator:
 
     def graph_lookup(self, question: str) -> Dict[str, Any]:
         self._bind()
-        ents = regex_extract(question, [])
+        entities = regex_extract(question, [])
         result = kg_capability.invoke(
             "execute_plan",
             question=question,
-            entities=ents,
-            plan={"kg_ops": ["author_ego"] if ents.get("author_name") else ["keyword_ego"]},
+            entities=entities,
+            plan={
+                "kg_ops": ["author_ego"]
+                if entities.get("author_name")
+                else ["keyword_ego"]
+            },
             last_dois=[],
             journal_id=self.settings.journal_id,
         )
         return result.get("data") or {}
 
-    def _pack_result(self, question: str, final: Dict[str, Any], answer: str) -> AskResult:
-        intents = final.get("intents") or ["rag"]
-        intent = "multi" if len(intents) > 1 else intents[0]
+    def _pack_result(self, final: Dict[str, Any], answer: str) -> AskResult:
+        intents = list(final.get("intents") or ["sql"])
+        intent_name = "multi" if len(intents) > 1 else intents[0]
         legacy = {"sql": "trend", "kg": "graph", "rag": "rag", "multi": "multi"}
-        citations = final.get("citations") or []
-        rag = final.get("rag_evidence") or {}
+        citations = list(final.get("citations") or [])
+        rag = dict(final.get("rag_evidence") or {})
         if rag.get("citations") and not citations:
-            citations = rag["citations"]
-        sql = final.get("sql_evidence") or {}
-        result_set = final.get("result_set") or {}
-        shown_count = int(sql.get("shown_count") or 0)
-        if not shown_count:
-            shown_count = len(result_set.get("items") or [])
-        if not shown_count:
-            for key in ("authors", "institutions", "papers", "keywords", "yearly"):
-                if isinstance(sql.get(key), list):
-                    shown_count = len(sql[key])
-                    if shown_count:
-                        break
-        total_count = int(sql.get("total_count") or shown_count)
-        has_more = bool(sql.get("has_more"))
+            citations = list(rag["citations"])
 
+        sql = dict(final.get("sql_evidence") or {})
+        result_set = dict(final.get("result_set") or {})
+        continuation_rows = [
+            row
+            for row in (final.get("operation_results") or [])
+            if bool((row.get("result_set") or {}).get("has_more"))
+        ]
+        continuation = (continuation_rows[0].get("result_set") or {}) if continuation_rows else {}
+        continuation_operation_id = (
+            continuation_rows[0].get("op_id") if continuation_rows else None
+        )
+        if continuation_operation_id:
+            continuation = {
+                **continuation,
+                "operation_id": continuation_operation_id,
+            }
+        shown_count = int(
+            continuation.get("shown_count")
+            or sql.get("shown_count")
+            or len(result_set.get("items") or [])
+        )
+        total_count = int(
+            continuation.get("total_count")
+            or sql.get("total_count")
+            or result_set.get("total_count")
+            or shown_count
+        )
+        has_more = bool(continuation.get("has_more") or sql.get("has_more"))
+
+        evidence = {
+            "pipeline": final.get("pipeline") or {},
+            "intents": intents,
+            "route_reason": final.get("route_reason"),
+            "followup_intent": final.get("followup_intent") or {},
+            "turn_intent": final.get("turn_intent") or {},
+            "intent_schema": final.get("intent") or {},
+            "route": final.get("route") or {},
+            "query_plan": final.get("query_plan") or {},
+            "analysis_plan": final.get("analysis_plan") or {},
+            "validation_report": final.get("validation_report") or {},
+            "operation_results": final.get("operation_results") or [],
+            "coverage_report": final.get("coverage_report") or {},
+            "result_set": result_set,
+            "continuation": continuation,
+            "answer_coverage": final.get("answer_coverage") or {},
+            "quality_report": final.get("quality_report") or {},
+            "goal": final.get("goal"),
+            "stage": final.get("stage"),
+            "evidence_bundle": final.get("evidence_bundle") or [],
+            "execution_trace": final.get("execution_trace") or [],
+            "stage_timings_ms": final.get("stage_timings_ms") or {},
+            "sql": final.get("sql_evidence") or {},
+            "kg": final.get("kg_evidence") or {},
+            "rag": final.get("rag_evidence") or {},
+            "errors": final.get("errors") or [],
+        }
         return AskResult(
             answer=answer,
-            intent=legacy.get(intent, intent),
+            intent=legacy.get(intent_name, intent_name),
             intents=intents,
-            route_reason=final.get("route_reason") or "",
+            route_reason=str(final.get("route_reason") or ""),
             citations=citations,
-            evidence={
-                "intents": intents,
-                "route_reason": final.get("route_reason"),
-                "followup_intent": final.get("followup_intent"),
-                "turn_intent": final.get("turn_intent"),
-                "intent_schema": final.get("intent") or {},
-                "route": final.get("route"),
-                "query_plan": final.get("query_plan"),
-                "analysis_plan": final.get("analysis_plan"),
-                "operation_results": final.get("operation_results") or [],
-                "coverage_report": final.get("coverage_report") or {},
-                "result_set": result_set,
-                "answer_coverage": final.get("answer_coverage") or {},
-                "quality_report": final.get("quality_report") or {},
-                "goal": final.get("goal"),
-                "stage": final.get("stage"),
-                "evidence_bundle": final.get("evidence_bundle"),
-                "react_trace": final.get("react_trace"),
-                "sql": final.get("sql_evidence"),
-                "kg": final.get("kg_evidence"),
-                "rag": final.get("rag_evidence"),
-                "errors": final.get("errors") or [],
-            },
+            evidence=evidence,
             truncated=has_more,
             shown_count=shown_count,
             total_count=total_count,
@@ -211,7 +234,7 @@ class ChatOrchestrator:
     @traceable(
         name="journal_qa.ask",
         run_type="chain",
-        tags=["journal-qa", "production"],
+        tags=["journal-qa", "production", "unified-pipeline"],
         process_inputs=_trace_ask_inputs,
         process_outputs=_trace_ask_output,
     )
@@ -226,32 +249,32 @@ class ChatOrchestrator:
     ) -> AskResult:
         self._bind()
         started = time.monotonic()
-        prepared = prepare_journal_agent(
+        state = self.pipeline.prepare(
             question,
-            history=history or [],
             top_k=top_k,
+            history=history or [],
             last_dois=last_dois or [],
-            journal_id=self.settings.journal_id,
             previous_turn=previous_turn,
             thread_id=thread_id,
         )
         prepared_ms = int((time.monotonic() - started) * 1000)
         generation_started = time.monotonic()
-        answer = finalize_answer("".join(stream_generate(prepared)), prepared.get("intents") or [], prepared)
-        _attach_answer_quality(prepared, answer)
-        prepared["stage_timings_ms"] = {
-            "understand_query_retrieve": prepared_ms,
-            "generate": int((time.monotonic() - generation_started) * 1000),
-            "total": int((time.monotonic() - started) * 1000),
-        }
-        result = self._pack_result(question, prepared, answer)
-        result.evidence["stage_timings_ms"] = prepared["stage_timings_ms"]
-        return result
+        answer = self.pipeline.generate(state)
+        timings = dict(state.get("stage_timings_ms") or {})
+        timings.update(
+            {
+                "understand_query_retrieve": prepared_ms,
+                "generate": int((time.monotonic() - generation_started) * 1000),
+                "total": int((time.monotonic() - started) * 1000),
+            }
+        )
+        state["stage_timings_ms"] = timings
+        return self._pack_result(state, answer)
 
     @traceable(
         name="journal_qa.ask_stream",
         run_type="chain",
-        tags=["journal-qa", "production", "stream"],
+        tags=["journal-qa", "production", "stream", "unified-pipeline"],
         process_inputs=_trace_ask_inputs,
         reduce_fn=_reduce_stream_trace,
     )
@@ -264,67 +287,45 @@ class ChatOrchestrator:
         previous_turn: Optional[Dict[str, Any]] = None,
         thread_id: Optional[str] = None,
     ) -> Iterator[Dict[str, Any]]:
-        """Yield SSE-friendly events: status → delta* → done | error."""
         self._bind()
         started = time.monotonic()
         yield {"type": "status", "stage": "understand", "message": "理解问题中…"}
         yield {"type": "status", "stage": "retrieve", "message": "查询数据中…"}
         try:
-            prepared = prepare_journal_agent(
+            state = self.pipeline.prepare(
                 question,
-                history=history or [],
                 top_k=top_k,
+                history=history or [],
                 last_dois=last_dois or [],
-                journal_id=self.settings.journal_id,
                 previous_turn=previous_turn,
                 thread_id=thread_id,
             )
-        except Exception as e:
-            yield {"type": "error", "message": str(e)}
+        except Exception as exc:
+            yield {"type": "error", "message": str(exc)}
             return
 
-        intents = prepared.get("intents") or ["rag"]
         prepared_ms = int((time.monotonic() - started) * 1000)
         yield {"type": "status", "stage": "answer", "message": "组织答案中…"}
-
-        chunks: List[str] = []
         try:
-            for delta in stream_generate(prepared):
-                chunks.append(delta)
-        except Exception as e:
-            if chunks:
-                answer = finalize_answer("".join(chunks), intents, prepared)
-                _attach_answer_quality(prepared, answer)
-                result = self._pack_result(question, prepared, answer)
-                for index in range(0, len(result.answer), 48):
-                    yield {"type": "delta", "text": result.answer[index : index + 48]}
-                yield {
-                    "type": "done",
-                    "answer": result.answer,
-                    "citations": result.citations,
-                    "partial": True,
-                    "error": str(e),
-                    "truncated": result.truncated,
-                    "shown_count": result.shown_count,
-                    "total_count": result.total_count,
-                    "has_more": result.has_more,
-                    "evidence": result.evidence,
-                }
-            else:
-                yield {"type": "error", "message": str(e)}
+            # generate() buffers and quality-gates the complete answer.  No
+            # draft token can cross the SSE boundary before acceptance.
+            answer = self.pipeline.generate(state)
+        except Exception as exc:
+            yield {"type": "error", "message": str(exc)}
             return
 
-        answer = finalize_answer("".join(chunks), intents, prepared)
-        _attach_answer_quality(prepared, answer)
-        prepared["stage_timings_ms"] = {
-            "understand_query_retrieve": prepared_ms,
-            "generate": int((time.monotonic() - started) * 1000) - prepared_ms,
-            "total": int((time.monotonic() - started) * 1000),
-        }
-        result = self._pack_result(question, prepared, answer)
-        result.evidence["stage_timings_ms"] = prepared["stage_timings_ms"]
-        for index in range(0, len(result.answer), 48):
-            yield {"type": "delta", "text": result.answer[index : index + 48]}
+        timings = dict(state.get("stage_timings_ms") or {})
+        timings.update(
+            {
+                "understand_query_retrieve": prepared_ms,
+                "generate": int((time.monotonic() - started) * 1000) - prepared_ms,
+                "total": int((time.monotonic() - started) * 1000),
+            }
+        )
+        state["stage_timings_ms"] = timings
+        result = self._pack_result(state, answer)
+        for index in range(0, len(answer), 48):
+            yield {"type": "delta", "text": answer[index : index + 48]}
         yield {
             "type": "done",
             "answer": result.answer,
@@ -340,4 +341,17 @@ class ChatOrchestrator:
 
     @staticmethod
     def reset_thread(thread_id: str) -> None:
-        reset_agent_thread(thread_id)
+        """ConversationStore is the only state source; no graph checkpoint exists."""
+        del thread_id
+
+
+# Drop-in name for existing callers while production import paths migrate.
+ChatOrchestrator = ProductionOrchestrator
+
+
+__all__ = [
+    "AskResult",
+    "ProductionOrchestrator",
+    "ChatOrchestrator",
+    "_trace_ask_inputs",
+]

@@ -104,6 +104,12 @@ def simple_exec_node(state: JournalState) -> Dict[str, Any]:
                 "source": "conversation",
             }
             updates["sql_evidence"] = data
+            for spec in plan.get("operations") or []:
+                if isinstance(spec, dict) and spec.get("type") == "clarification":
+                    data.setdefault("operation_data", {})[str(spec.get("id"))] = {
+                        **{key: value for key, value in data.items() if key != "operation_data"},
+                        "operation": "clarification",
+                    }
             op = "clarification"
         elif source == "sql":
             data = run_sql_agent(question, entities, plan, journal_id=journal_id)

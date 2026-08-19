@@ -14,6 +14,7 @@ from app.capabilities.sql_capability import execute_plan
 from app.config import get_corpus_settings
 from app.services.orchestrator import ChatOrchestrator
 from app.services.orchestrator import AskResult
+from app.services.conversation_store import ConversationStore
 from app.services.sqlite_repo import SQLiteRepo
 
 
@@ -90,6 +91,10 @@ class APIContractTests(unittest.TestCase):
 
         class FakeBot:
             @staticmethod
+            def reset_thread(*args, **kwargs):
+                return None
+
+            @staticmethod
             def ask(*args, **kwargs):
                 return AskResult(
                     answer="ok",
@@ -115,7 +120,10 @@ class APIContractTests(unittest.TestCase):
 
         client = TestClient(app)
         conversation_id = "api-contract-test"
-        with patch("app.api.main.get_bot", return_value=FakeBot()):
+        memory_store = ConversationStore(ttl_seconds=0, max_sessions=0)
+        with patch("app.api.main.get_bot", return_value=FakeBot()), patch(
+            "app.api.main.conversation_store", memory_store
+        ):
             response = client.post(
                 "/ask",
                 json={
@@ -133,6 +141,20 @@ class APIContractTests(unittest.TestCase):
             self.assertIn("shown_count", payload)
             self.assertIn("total_count", payload)
             self.assertIn("has_more", payload)
+
+            listing = client.get("/conversations", params={"journal_id": "ZDXBNXB"})
+            self.assertEqual(listing.status_code, 200)
+            self.assertEqual(listing.json()["conversations"][0]["conversation_id"], conversation_id)
+
+            detail = client.get(
+                f"/conversations/{conversation_id}", params={"journal_id": "ZDXBNXB"}
+            )
+            self.assertEqual(detail.status_code, 200)
+            self.assertEqual(detail.json()["turns"][0]["answer"], "ok")
+            self.assertEqual(
+                set(detail.json()["turns"][0]),
+                {"turn_id", "question", "answer", "citations", "created_at"},
+            )
 
             stream = client.post(
                 "/ask/stream",
@@ -155,6 +177,40 @@ class APIContractTests(unittest.TestCase):
         self.assertIn("shown_count", done)
         self.assertIn("total_count", done)
         self.assertIn("has_more", done)
+
+    def test_frontend_css_is_not_stale_cached(self):
+        response = TestClient(app).get("/static/styles.css")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.headers["cache-control"],
+            "no-cache, no-store, must-revalidate",
+        )
+
+    def test_chat_service_exposes_public_mcp_guide_and_media(self):
+        client = TestClient(app)
+
+        guide = client.get("/")
+        self.assertEqual(guide.status_code, 200)
+        self.assertIn("text/html", guide.headers["content-type"])
+        self.assertIn("期刊知识服务", guide.text)
+        self.assertIn('href="/ask"', guide.text)
+        self.assertIn("frame-ancestors 'none'", guide.headers["content-security-policy"])
+
+        legacy_guide = client.get("/guide", follow_redirects=False)
+        self.assertEqual(legacy_guide.status_code, 308)
+        self.assertEqual(legacy_guide.headers["location"], "/")
+
+        chat_page = client.get("/ask")
+        self.assertEqual(chat_page.status_code, 200)
+        self.assertIn("text/html", chat_page.headers["content-type"])
+
+        poster = client.head("/guide-demo-poster.jpg")
+        self.assertEqual(poster.status_code, 200)
+        self.assertEqual(poster.headers["content-type"], "image/jpeg")
+
+        video = client.head("/guide-demo.mp4")
+        self.assertEqual(video.status_code, 200)
+        self.assertEqual(video.headers["content-type"], "video/mp4")
 
 
 if __name__ == "__main__":

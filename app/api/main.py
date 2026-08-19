@@ -13,8 +13,9 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from langsmith import tracing_context
 from pydantic import BaseModel, Field
 
 from app.config import (
@@ -29,6 +30,10 @@ from app.config import (
 from app.services.conversation_store import build_turn_record, conversation_store
 
 WEB_DIR = Path(__file__).resolve().parents[2] / "web"
+MCP_GUIDE_DIR = Path(__file__).resolve().parents[1] / "mcp_server"
+MCP_GUIDE_HTML = MCP_GUIDE_DIR / "guide.html"
+MCP_GUIDE_DEMO_VIDEO = MCP_GUIDE_DIR / "guide-demo.mp4"
+MCP_GUIDE_DEMO_POSTER = MCP_GUIDE_DIR / "guide-demo-poster.jpg"
 
 app = FastAPI(
     title="AI 期刊知识助手",
@@ -59,7 +64,21 @@ _requests_per_minute = max(0, int(os.getenv("REQUESTS_PER_MINUTE", "0") or 0))
 @app.middleware("http")
 async def optional_access_controls(request: Request, call_next):
     """Opt-in public-deployment controls; local defaults remain unrestricted."""
-    if request.url.path not in {"/", "/health"} and not request.url.path.startswith("/static/"):
+    public_paths = {
+        "/",
+        "/health",
+        "/guide",
+        "/guide-demo.mp4",
+        "/guide-demo-poster.jpg",
+    }
+    is_public_chat_page = (
+        request.url.path == "/ask" and request.method in {"GET", "HEAD"}
+    )
+    if (
+        request.url.path not in public_paths
+        and not is_public_chat_page
+        and not request.url.path.startswith("/static/")
+    ):
         if _access_token:
             supplied = request.headers.get("authorization", "")
             if supplied != f"Bearer {_access_token}":
@@ -75,7 +94,11 @@ async def optional_access_controls(request: Request, call_next):
                     return JSONResponse({"detail": "rate limit exceeded"}, status_code=429)
                 events.append(now)
     response = await call_next(request)
-    if request.url.path in {"/static/app.js", "/static/index.html"}:
+    if request.url.path in {
+        "/static/app.js",
+        "/static/styles.css",
+        "/static/index.html",
+    }:
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
@@ -91,8 +114,8 @@ def _validated_journal_id(journal_id: Optional[str]) -> str:
 
 def get_bot(journal_id: Optional[str] = None):
     """Cached per-corpus resources; conversation state lives elsewhere."""
-    # Lazy import: chromadb/langgraph are heavy and would block Railway healthchecks.
-    from app.services.orchestrator import ChatOrchestrator
+    # Lazy import keeps vector/graph clients away from the liveness path.
+    from app.services.production_orchestrator import ChatOrchestrator
 
     settings = bind_corpus(_validated_journal_id(journal_id))
     jid = settings.journal_id
@@ -142,7 +165,7 @@ def health() -> Dict[str, Any]:
         "sqlite_path": settings.sqlite_path,
         "journals": list_journals(),
         "frontend": {
-            "asset_version": "20260810-history-1",
+            "asset_version": "20260811-sessions-3",
             "vis_network_js": vis_js.exists(),
             "vis_network_css": vis_css.exists(),
             "vis_network_js_bytes": vis_js.stat().st_size if vis_js.exists() else 0,
@@ -217,6 +240,8 @@ def _conversation_inputs(req: AskRequest) -> Dict[str, Any]:
     return {
         "journal_id": jid,
         "conversation_id": cid,
+        "thread_id": f"{jid}:{cid}",
+        "reset_graph": bool(req.reset),
         "history": history,
         "previous_turn": previous_turn,
         "last_dois": last_dois,
@@ -227,16 +252,28 @@ def _conversation_inputs(req: AskRequest) -> Dict[str, Any]:
 def ask(req: AskRequest) -> Dict[str, Any]:
     context = _conversation_inputs(req)
     bot = get_bot(context["journal_id"])
+    if context["reset_graph"]:
+        bot.reset_thread(context["thread_id"])
     request_id = str(uuid.uuid4())
     started = time.monotonic()
     try:
-        result = bot.ask(
-            req.question,
-            top_k=req.top_k,
-            history=context["history"],
-            last_dois=context["last_dois"],
-            previous_turn=context["previous_turn"],
-        )
+        with tracing_context(
+            metadata={
+                "thread_id": context["conversation_id"],
+                "request_id": request_id,
+                "journal_id": context["journal_id"],
+                "endpoint": "/ask",
+            },
+            tags=["api", context["journal_id"]],
+        ):
+            result = bot.ask(
+                req.question,
+                top_k=req.top_k,
+                history=context["history"],
+                last_dois=context["last_dois"],
+                previous_turn=context["previous_turn"],
+                thread_id=context["thread_id"],
+            )
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
     turn = build_turn_record(req.question, result)
@@ -274,6 +311,8 @@ def ask(req: AskRequest) -> Dict[str, Any]:
 def ask_stream(req: AskRequest) -> StreamingResponse:
     context = _conversation_inputs(req)
     bot = get_bot(context["journal_id"])
+    if context["reset_graph"]:
+        bot.reset_thread(context["thread_id"])
     request_id = str(uuid.uuid4())
     started = time.monotonic()
 
@@ -282,41 +321,51 @@ def ask_stream(req: AskRequest) -> StreamingResponse:
         # may run outside the request thread that called get_bot).
         bind_corpus(context["journal_id"])
         try:
-            for ev in bot.ask_stream(
-                req.question,
-                top_k=req.top_k,
-                history=context["history"],
-                last_dois=context["last_dois"],
-                previous_turn=context["previous_turn"],
+            with tracing_context(
+                metadata={
+                    "thread_id": context["conversation_id"],
+                    "request_id": request_id,
+                    "journal_id": context["journal_id"],
+                    "endpoint": "/ask/stream",
+                },
+                tags=["api", context["journal_id"], "stream"],
             ):
-                if ev.get("type") == "done":
-                    result_like = SimpleNamespace(
-                        answer=ev.get("answer") or "",
-                        citations=ev.get("citations") or [],
-                        evidence=ev.get("evidence") or {},
-                    )
-                    turn = build_turn_record(req.question, result_like)
-                    conversation_store.append(
-                        context["conversation_id"], context["journal_id"], turn
-                    )
-                    ev.update(
-                        {
-                            "request_id": request_id,
-                            "conversation_id": context["conversation_id"],
-                            "turn_id": turn.turn_id,
-                        }
-                    )
-                    logger.info(
-                        "ask_stream request_id=%s conversation_id=%s journal_id=%s intent=%s plan=%s elapsed_ms=%d truncated=%s",
-                        request_id,
-                        context["conversation_id"],
-                        context["journal_id"],
-                        json.dumps(turn.intent or {}, ensure_ascii=False),
-                        json.dumps(turn.query_plan or {}, ensure_ascii=False),
-                        int((time.monotonic() - started) * 1000),
-                        bool(ev.get("truncated")),
-                    )
-                yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
+                for ev in bot.ask_stream(
+                    req.question,
+                    top_k=req.top_k,
+                    history=context["history"],
+                    last_dois=context["last_dois"],
+                    previous_turn=context["previous_turn"],
+                    thread_id=context["thread_id"],
+                ):
+                    if ev.get("type") == "done":
+                        result_like = SimpleNamespace(
+                            answer=ev.get("answer") or "",
+                            citations=ev.get("citations") or [],
+                            evidence=ev.get("evidence") or {},
+                        )
+                        turn = build_turn_record(req.question, result_like)
+                        conversation_store.append(
+                            context["conversation_id"], context["journal_id"], turn
+                        )
+                        ev.update(
+                            {
+                                "request_id": request_id,
+                                "conversation_id": context["conversation_id"],
+                                "turn_id": turn.turn_id,
+                            }
+                        )
+                        logger.info(
+                            "ask_stream request_id=%s conversation_id=%s journal_id=%s intent=%s plan=%s elapsed_ms=%d truncated=%s",
+                            request_id,
+                            context["conversation_id"],
+                            context["journal_id"],
+                            json.dumps(turn.intent or {}, ensure_ascii=False),
+                            json.dumps(turn.query_plan or {}, ensure_ascii=False),
+                            int((time.monotonic() - started) * 1000),
+                            bool(ev.get("truncated")),
+                        )
+                    yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
 
@@ -329,6 +378,54 @@ def ask_stream(req: AskRequest) -> StreamingResponse:
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@app.get("/conversations")
+def conversations(
+    journal_id: str = Query(default=DEFAULT_JOURNAL_ID),
+    limit: int = Query(default=100, ge=1, le=500),
+) -> Dict[str, Any]:
+    jid = _validated_journal_id(journal_id)
+    return {
+        "journal_id": jid,
+        "conversations": conversation_store.list_conversations(jid, limit),
+    }
+
+
+@app.get("/conversations/{conversation_id}")
+def conversation_detail(
+    conversation_id: str,
+    journal_id: str = Query(default=DEFAULT_JOURNAL_ID),
+) -> Dict[str, Any]:
+    jid = _validated_journal_id(journal_id)
+    state = conversation_store.get(conversation_id, jid)
+    if not state.turns:
+        raise HTTPException(status_code=404, detail="conversation not found")
+    return {
+        "conversation_id": conversation_id,
+        "journal_id": jid,
+        "turns": [
+            {
+                "turn_id": turn.turn_id,
+                "question": turn.question,
+                "answer": turn.answer,
+                "citations": turn.citations,
+                "created_at": turn.created_at,
+            }
+            for turn in state.turns
+        ],
+    }
+
+
+@app.delete("/conversations/{conversation_id}")
+def delete_conversation(
+    conversation_id: str,
+    journal_id: str = Query(default=DEFAULT_JOURNAL_ID),
+) -> Dict[str, Any]:
+    jid = _validated_journal_id(journal_id)
+    conversation_store.reset(conversation_id, jid)
+    get_bot(jid).reset_thread(f"{jid}:{conversation_id}")
+    return {"ok": True, "conversation_id": conversation_id, "journal_id": jid}
 
 
 @app.get("/trends/yearly")
@@ -463,8 +560,8 @@ def graph_network_institution(
     return data
 
 
-@app.get("/")
-def index() -> FileResponse:
+@app.get("/ask", include_in_schema=False)
+def chat_page() -> FileResponse:
     index_path = WEB_DIR / "index.html"
     if not index_path.exists():
         raise HTTPException(status_code=404, detail="frontend not found")
@@ -474,6 +571,66 @@ def index() -> FileResponse:
             "Cache-Control": "no-cache, no-store, must-revalidate",
             "Pragma": "no-cache",
             "Expires": "0",
+        },
+    )
+
+
+@app.get("/", include_in_schema=False)
+def mcp_guide() -> FileResponse:
+    if not MCP_GUIDE_HTML.exists():
+        raise HTTPException(status_code=404, detail="MCP guide not found")
+    return FileResponse(
+        MCP_GUIDE_HTML,
+        media_type="text/html",
+        headers={
+            "Cache-Control": "public, max-age=300",
+            "Content-Security-Policy": (
+                "default-src 'none'; style-src 'unsafe-inline'; "
+                "script-src 'unsafe-inline'; img-src 'self'; "
+                "media-src 'self'; base-uri 'none'; frame-ancestors 'none'; "
+                "form-action 'none'"
+            ),
+            "Referrer-Policy": "no-referrer",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@app.get("/guide", include_in_schema=False)
+def legacy_mcp_guide() -> RedirectResponse:
+    return RedirectResponse(url="/", status_code=308)
+
+
+@app.api_route(
+    "/guide-demo.mp4", methods=["GET", "HEAD"], include_in_schema=False
+)
+def mcp_guide_demo() -> FileResponse:
+    if not MCP_GUIDE_DEMO_VIDEO.exists():
+        raise HTTPException(status_code=404, detail="MCP guide demo not found")
+    return FileResponse(
+        MCP_GUIDE_DEMO_VIDEO,
+        media_type="video/mp4",
+        filename="journal-knowledge-service-demo.mp4",
+        content_disposition_type="inline",
+        headers={
+            "Cache-Control": "public, max-age=86400",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@app.api_route(
+    "/guide-demo-poster.jpg", methods=["GET", "HEAD"], include_in_schema=False
+)
+def mcp_guide_demo_poster() -> FileResponse:
+    if not MCP_GUIDE_DEMO_POSTER.exists():
+        raise HTTPException(status_code=404, detail="MCP guide poster not found")
+    return FileResponse(
+        MCP_GUIDE_DEMO_POSTER,
+        media_type="image/jpeg",
+        headers={
+            "Cache-Control": "public, max-age=86400",
+            "X-Content-Type-Options": "nosniff",
         },
     )
 

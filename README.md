@@ -18,7 +18,37 @@ cp .env.example .env   # 填入密钥
 python3 -m uvicorn app.api.main:app --host 0.0.0.0 --port 8080
 ```
 
-打开 http://127.0.0.1:8080/ ，健康检查：http://127.0.0.1:8080/health
+使用指南：http://127.0.0.1:8080/ ，对话页面：http://127.0.0.1:8080/ask ，
+健康检查：http://127.0.0.1:8080/health
+
+会话状态默认持久化到 `data/conversations.db`：LangGraph `SqliteSaver`
+保存执行 checkpoint，应用表保存左侧会话目录和结构化 Turn。服务重启后可继续追问；
+可通过 `CONVERSATION_DB_PATH` 修改路径。
+
+## LangSmith Trace 与 Eval
+
+在 `.env` 中配置：
+
+```bash
+LANGSMITH_TRACING=true
+LANGSMITH_API_KEY=your-langsmith-api-key
+LANGSMITH_PROJECT=journal-qa
+```
+
+启用后，每次 `/ask` 和 `/ask/stream` 都会记录为根 trace；同一个
+`conversation_id` 会聚合为 LangSmith Thread，LangGraph 节点和 MiniMax 调用显示为子 span。
+
+同步 10 个核心任务数据集并运行生产链路 Eval：
+
+```bash
+python3 eval/run_langsmith_eval.py
+```
+
+只同步数据集、不执行问答：
+
+```bash
+python3 eval/run_langsmith_eval.py --sync-only
+```
 
 ## Railway 部署
 

@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import json
+import os
+import sqlite3
 import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from app.config import ROOT
 
 
 @dataclass
@@ -53,14 +59,49 @@ class ConversationState:
 
 
 class ConversationStore:
-    """Small in-memory store; replaceable by Redis without changing agents."""
+    """SQLite-backed user-facing conversation projection."""
 
-    def __init__(self, ttl_seconds: int = 7200, max_sessions: int = 100, max_turns: int = 10):
+    def __init__(
+        self,
+        db_path: str | Path = ":memory:",
+        ttl_seconds: int = 7200,
+        max_sessions: int = 100,
+        max_turns: int = 10,
+    ):
         self.ttl_seconds = ttl_seconds
         self.max_sessions = max_sessions
         self.max_turns = max_turns
-        self._items: Dict[Tuple[str, str], ConversationState] = {}
         self._lock = threading.RLock()
+        self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
+        self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA foreign_keys = ON")
+        if str(db_path) != ":memory:":
+            self._conn.execute("PRAGMA journal_mode = WAL")
+        self._conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS conversation_index (
+                conversation_id TEXT NOT NULL,
+                journal_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                PRIMARY KEY (conversation_id, journal_id)
+            );
+            CREATE TABLE IF NOT EXISTS conversation_turns (
+                conversation_id TEXT NOT NULL,
+                journal_id TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                turn_id TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                PRIMARY KEY (conversation_id, journal_id, position),
+                FOREIGN KEY (conversation_id, journal_id)
+                    REFERENCES conversation_index(conversation_id, journal_id)
+                    ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_conversation_updated
+                ON conversation_index(journal_id, updated_at DESC);
+            """
+        )
 
     @staticmethod
     def new_id() -> str:
@@ -68,41 +109,127 @@ class ConversationStore:
 
     def _cleanup(self) -> None:
         now = time.time()
-        expired = [k for k, v in self._items.items() if now - v.updated_at > self.ttl_seconds]
-        for key in expired:
-            self._items.pop(key, None)
-        if len(self._items) > self.max_sessions:
-            oldest = sorted(self._items.items(), key=lambda row: row[1].updated_at)
-            for key, _ in oldest[: len(self._items) - self.max_sessions]:
-                self._items.pop(key, None)
+        with self._conn:
+            if self.ttl_seconds > 0:
+                self._conn.execute(
+                    "DELETE FROM conversation_index WHERE updated_at < ?",
+                    (now - self.ttl_seconds,),
+                )
+            if self.max_sessions > 0:
+                count = int(
+                    self._conn.execute("SELECT COUNT(*) FROM conversation_index").fetchone()[0]
+                )
+                if count > self.max_sessions:
+                    self._conn.execute(
+                        """
+                        DELETE FROM conversation_index
+                        WHERE (conversation_id, journal_id) IN (
+                            SELECT conversation_id, journal_id
+                            FROM conversation_index
+                            ORDER BY updated_at ASC
+                            LIMIT ?
+                        )
+                        """,
+                        (count - self.max_sessions,),
+                    )
+
+    def _load(self, conversation_id: str, journal_id: str) -> ConversationState:
+        row = self._conn.execute(
+            """
+            SELECT updated_at FROM conversation_index
+            WHERE conversation_id = ? AND journal_id = ?
+            """,
+            (conversation_id, journal_id),
+        ).fetchone()
+        turns = [
+            TurnRecord(**json.loads(item["payload"]))
+            for item in self._conn.execute(
+                """
+                SELECT payload FROM conversation_turns
+                WHERE conversation_id = ? AND journal_id = ?
+                ORDER BY position
+                """,
+                (conversation_id, journal_id),
+            )
+        ]
+        return ConversationState(
+            conversation_id=conversation_id,
+            journal_id=journal_id,
+            turns=turns,
+            updated_at=float(row["updated_at"]) if row else time.time(),
+        )
 
     def get(self, conversation_id: str, journal_id: str) -> ConversationState:
-        key = (conversation_id, journal_id)
         with self._lock:
             self._cleanup()
-            state = self._items.get(key)
-            if state is None:
-                state = ConversationState(conversation_id=conversation_id, journal_id=journal_id)
-                self._items[key] = state
-            state.updated_at = time.time()
-            self._cleanup()
-            return state
+            return self._load(conversation_id, journal_id)
 
     def reset(self, conversation_id: str, journal_id: str) -> ConversationState:
-        key = (conversation_id, journal_id)
         with self._lock:
-            self._cleanup()
-            state = ConversationState(conversation_id=conversation_id, journal_id=journal_id)
-            self._items[key] = state
-            self._cleanup()
-            return state
+            with self._conn:
+                self._conn.execute(
+                    "DELETE FROM conversation_index WHERE conversation_id = ? AND journal_id = ?",
+                    (conversation_id, journal_id),
+                )
+            return ConversationState(conversation_id=conversation_id, journal_id=journal_id)
 
     def append(self, conversation_id: str, journal_id: str, turn: TurnRecord) -> None:
         with self._lock:
-            state = self.get(conversation_id, journal_id)
-            state.turns.append(turn)
-            state.turns = state.turns[-self.max_turns :]
-            state.updated_at = time.time()
+            now = time.time()
+            with self._conn:
+                self._conn.execute(
+                    """
+                    INSERT INTO conversation_index
+                        (conversation_id, journal_id, title, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(conversation_id, journal_id)
+                    DO UPDATE SET updated_at = excluded.updated_at
+                    """,
+                    (conversation_id, journal_id, turn.question[:80] or "未命名对话", now, now),
+                )
+                position = int(
+                    self._conn.execute(
+                        """
+                        SELECT COALESCE(MAX(position), -1) + 1 FROM conversation_turns
+                        WHERE conversation_id = ? AND journal_id = ?
+                        """,
+                        (conversation_id, journal_id),
+                    ).fetchone()[0]
+                )
+                self._conn.execute(
+                    """
+                    INSERT INTO conversation_turns
+                        (conversation_id, journal_id, position, turn_id, payload)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        conversation_id,
+                        journal_id,
+                        position,
+                        turn.turn_id,
+                        json.dumps(turn.to_dict(), ensure_ascii=False),
+                    ),
+                )
+                if self.max_turns > 0:
+                    self._conn.execute(
+                        """
+                        DELETE FROM conversation_turns
+                        WHERE conversation_id = ? AND journal_id = ?
+                          AND position NOT IN (
+                              SELECT position FROM conversation_turns
+                              WHERE conversation_id = ? AND journal_id = ?
+                              ORDER BY position DESC LIMIT ?
+                          )
+                        """,
+                        (
+                            conversation_id,
+                            journal_id,
+                            conversation_id,
+                            journal_id,
+                            self.max_turns,
+                        ),
+                    )
+            self._cleanup()
 
     def reconcile_history(
         self,
@@ -112,11 +239,9 @@ class ConversationStore:
     ) -> ConversationState:
         """Keep the longest exact turn prefix represented by an edited client branch."""
         with self._lock:
-            state = self.get(conversation_id, journal_id)
+            state = self._load(conversation_id, journal_id)
             if not client_history:
-                state.turns = []
-                state.updated_at = time.time()
-                return state
+                return self.reset(conversation_id, journal_id)
             matched = 0
             for index, turn in enumerate(state.turns):
                 pair = [
@@ -129,17 +254,70 @@ class ConversationStore:
                 matched += 1
             # Any mismatch marks the edited branch point. Preserve only the
             # exact complete-turn prefix before that point.
-            state.turns = state.turns[:matched]
-            state.updated_at = time.time()
-            return state
+            with self._conn:
+                self._conn.execute(
+                    """
+                    DELETE FROM conversation_turns
+                    WHERE conversation_id = ? AND journal_id = ? AND position >= ?
+                    """,
+                    (conversation_id, journal_id, matched),
+                )
+                self._conn.execute(
+                    """
+                    UPDATE conversation_index SET updated_at = ?
+                    WHERE conversation_id = ? AND journal_id = ?
+                    """,
+                    (time.time(), conversation_id, journal_id),
+                )
+            return self._load(conversation_id, journal_id)
 
     def last_turn(self, conversation_id: str, journal_id: str) -> Optional[Dict[str, Any]]:
         with self._lock:
-            state = self.get(conversation_id, journal_id)
+            state = self._load(conversation_id, journal_id)
             return state.turns[-1].to_dict() if state.turns else None
 
+    def list_conversations(self, journal_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+        with self._lock:
+            self._cleanup()
+            return [
+                {
+                    "conversation_id": row["conversation_id"],
+                    "journal_id": row["journal_id"],
+                    "title": row["title"],
+                    "created_at": float(row["created_at"]),
+                    "updated_at": float(row["updated_at"]),
+                    "turn_count": int(row["turn_count"]),
+                }
+                for row in self._conn.execute(
+                    """
+                    SELECT i.*, COUNT(t.turn_id) AS turn_count
+                    FROM conversation_index i
+                    JOIN conversation_turns t
+                      ON t.conversation_id = i.conversation_id
+                     AND t.journal_id = i.journal_id
+                    WHERE i.journal_id = ?
+                    GROUP BY i.conversation_id, i.journal_id
+                    ORDER BY i.updated_at DESC
+                    LIMIT ?
+                    """,
+                    (journal_id, max(1, min(int(limit), 500))),
+                )
+            ]
 
-conversation_store = ConversationStore()
+    def close(self) -> None:
+        with self._lock:
+            self._conn.close()
+
+
+_conversation_db = os.getenv(
+    "CONVERSATION_DB_PATH", str(ROOT / "data" / "conversations.db")
+)
+conversation_store = ConversationStore(
+    _conversation_db,
+    ttl_seconds=0,
+    max_sessions=0,
+    max_turns=10,
+)
 
 
 def build_turn_record(question: str, result: Any) -> TurnRecord:
@@ -186,12 +364,27 @@ def build_turn_record(question: str, result: Any) -> TurnRecord:
             for c in getattr(result, "citations", []) or []
             if c.get("doi")
         ]
+    canonical_continuation = dict(evidence.get("continuation") or {})
     continuation = {
-        "has_more": bool(sql.get("has_more")),
-        "next_offset": sql.get("next_offset"),
-        "operation_id": sql.get("continuation_operation_id"),
-        "shown_count": int(sql.get("shown_count") or len(items)),
-        "total_count": int(sql.get("total_count") or len(items)),
+        "has_more": bool(
+            canonical_continuation.get("has_more") or sql.get("has_more")
+        ),
+        "next_offset": canonical_continuation.get(
+            "next_offset", sql.get("next_offset")
+        ),
+        "operation_id": canonical_continuation.get(
+            "operation_id", sql.get("continuation_operation_id")
+        ),
+        "shown_count": int(
+            canonical_continuation.get("shown_count")
+            or sql.get("shown_count")
+            or len(items)
+        ),
+        "total_count": int(
+            canonical_continuation.get("total_count")
+            or sql.get("total_count")
+            or len(items)
+        ),
     }
     if canonical_result_set:
         canonical_result_set.setdefault("constraints", {

@@ -22,7 +22,7 @@ from app.agents.coverage import assess_answer_coverage, assess_operations, asses
 from app.agents.generate import ensure_answer_operation_coverage, try_operation_plan_answer  # noqa: E402
 from app.capabilities.sql_capability import execute_plan  # noqa: E402
 from app.services.minimax_chat import MiniMaxChat  # noqa: E402
-from app.services.orchestrator import ChatOrchestrator  # noqa: E402
+from app.services.production_orchestrator import ChatOrchestrator  # noqa: E402
 from app.services.sqlite_repo import SQLiteRepo  # noqa: E402
 
 

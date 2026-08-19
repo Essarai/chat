@@ -4,7 +4,7 @@ import argparse
 import sys
 
 from app.config import get_settings
-from app.services.orchestrator import ChatOrchestrator
+from app.services.production_orchestrator import ChatOrchestrator
 
 
 BANNER = """
@@ -47,7 +47,7 @@ def run_repl(once: str | None = None) -> int:
         if q.lower() in {"exit", "quit", "q"}:
             raise SystemExit(0)
         if q.lower() in {"clear", "reset"}:
-            bot.reset()
+            bot.reset_thread("cli")
             print("会话已清空。")
             return
         print("思考中...")

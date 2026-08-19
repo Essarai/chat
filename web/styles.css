@@ -262,6 +262,9 @@ button.history-new:hover:not(:disabled) {
 
 .history-list li {
   position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
   margin: 0;
   padding: 0;
 }
@@ -295,6 +298,24 @@ button.history-item {
 button.history-item:hover:not(:disabled) {
   background: var(--surface);
   color: var(--ink);
+}
+
+button.history-delete {
+  position: relative;
+  z-index: 2;
+  width: 1.7rem;
+  height: 1.7rem;
+  padding: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+button.history-delete:hover:not(:disabled) {
+  background: #fce8e6;
+  color: #d93025;
 }
 
 .history-index {
@@ -925,6 +946,8 @@ button.tiny:hover:not(:disabled) {
 
   .history-list li {
     flex: 0 0 auto;
+    display: flex;
+    align-items: center;
   }
 
   .history-list li::after {
