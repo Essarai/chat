@@ -1,22 +1,17 @@
-FROM python:3.11-slim
+FROM python:3.11-alpine
 
 WORKDIR /app
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    SQLITE_PATH=/app/data/journal.db \
-    SQLITE_PATH_RWB=/app/data/journal_rwb.db \
     PORT=8080
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY app ./app
-COPY web ./web
-COPY data/journal.db ./data/journal.db
-COPY data/journal_rwb.db ./data/journal_rwb.db
+COPY mock_server.py ./mock_server.py
+COPY web/production-task.html web/production-task-list.html ./web/
+COPY web/production-task.css web/production-task-list.css ./web/
+COPY web/production-task.js web/production-task-list.js ./web/
 
 EXPOSE 8080
 
-# Railway injects PORT; bind 0.0.0.0 so the platform healthcheck can reach us.
-CMD ["sh", "-c", "exec uvicorn app.api.main:app --host 0.0.0.0 --port ${PORT:-8080}"]
+# Railway injects PORT. This branch serves only the two production-task Mock pages.
+CMD ["python", "mock_server.py"]
