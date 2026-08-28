@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#f4f6fa" />
     <title>创建生产任务 · 刊行</title>
-    <link rel="stylesheet" href="/static/production-task.css" />
+    <link rel="stylesheet" href="/static/production-task.css?v=20260828-3" />
   </head>
   <body>
     <div class="app-shell">
@@ -71,29 +71,47 @@
         </header>
 
         <main>
-          <nav class="breadcrumb" aria-label="面包屑"><a href="#">生产任务</a><span>/</span><span>创建生产任务</span></nav>
+          <nav class="breadcrumb" aria-label="面包屑"><a href="/static/production-task-list.html">生产任务</a><span>/</span><span id="breadcrumb-current">创建生产任务</span></nav>
 
           <section class="page-heading">
             <div>
-              <span class="page-kicker">NEW PRODUCTION</span>
-              <h1>创建生产任务</h1>
-              <p>上传稿件后，系统将自动识别文章、整理正文文件并提取元数据。</p>
+              <span id="page-kicker" class="page-kicker">NEW PRODUCTION</span>
+              <h1 id="page-title">创建生产任务</h1>
+              <p id="page-description">上传稿件后，系统将自动识别文章、整理正文文件并提取元数据。</p>
             </div>
-            <div class="draft-state"><i></i> 草稿已自动保存 <time id="saved-time">刚刚</time></div>
+            <div class="page-heading-actions">
+              <div class="draft-state"><i></i> 草稿已自动保存 <time id="saved-time">刚刚</time></div>
+              <a class="page-switch-button" href="/static/production-task-list.html">
+                <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 6h14M5 12h14M5 18h14"/></svg>
+                查看任务列表
+              </a>
+            </div>
+          </section>
+
+          <section id="revision-banner" class="revision-banner" aria-labelledby="revision-banner-title" hidden>
+            <span class="revision-banner-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M12 8v4M12 16h.01M10.3 4.6 3.4 17a2 2 0 0 0 1.7 3h13.8a2 2 0 0 0 1.7-3L13.7 4.6a2 2 0 0 0-3.4 0Z"/></svg>
+            </span>
+            <div class="revision-banner-copy">
+              <span id="revision-source">管理员驳回</span>
+              <strong id="revision-banner-title">请按反馈修订任务</strong>
+              <p id="revision-reason"></p>
+            </div>
+            <span id="revision-task-id" class="revision-task-id"></span>
           </section>
 
           <ol class="process-track" aria-label="创建生产任务流程">
             <li class="active" data-step="1">
-              <button class="step-nav" type="button" aria-current="step"><span>1</span><div><b>选择类型</b><small>确定发布阶段</small></div></button>
+              <button class="step-nav" type="button" aria-current="step"><span>1</span><div><b>发布设置</b><small>确定类型与范围</small></div></button>
             </li>
             <li data-step="2">
-              <button class="step-nav" type="button"><span>2</span><div><b>上传与识别</b><small>整理文章文件</small></div></button>
+              <button class="step-nav" type="button"><span>2</span><div><b id="step-2-title">上传与识别</b><small id="step-2-copy">整理文章文件</small></div></button>
             </li>
             <li data-step="3">
-              <button class="step-nav" type="button"><span>3</span><div><b>校对信息</b><small>确认文章信息</small></div></button>
+              <button class="step-nav" type="button"><span>3</span><div><b id="step-3-title">校对信息</b><small id="step-3-copy">确认文章信息</small></div></button>
             </li>
             <li data-step="4">
-              <button class="step-nav" type="button"><span>4</span><div><b>确认创建</b><small>核对并提交任务</small></div></button>
+              <button class="step-nav" type="button"><span>4</span><div><b id="step-4-title">确认创建</b><small id="step-4-copy">核对并提交任务</small></div></button>
             </li>
           </ol>
 
@@ -130,11 +148,30 @@
                 <span class="publication-copy"><strong>最新录用</strong><small>适用于希望实时上线的文章。请上传文章文件，并填写标题、作者、摘要等信息，无需加工，提交审核后即可上线。</small></span>
               </label>
             </div>
+            <div id="formal-import-mode" class="import-mode-panel">
+              <div class="import-mode-heading">
+                <div><strong>选择导入方式</strong><small>整期文件已确认无误时，可直接从 FTP 导入成品包。</small></div>
+                <span>正式出版专属</span>
+              </div>
+              <div class="import-mode-options" role="radiogroup" aria-label="正式出版导入方式">
+                <label class="import-mode-option">
+                  <input type="radio" name="formal-mode" value="articles" />
+                  <span class="mode-radio"></span>
+                  <span><b>单篇 / 多篇文章</b><small>上传文章正文，系统自动识别并归组。</small></span>
+                </label>
+                <label class="import-mode-option selected">
+                  <input type="radio" name="formal-mode" value="issue" checked />
+                  <span class="mode-radio"></span>
+                  <span><b>整期压缩包</b><small>从 FTP 多选或从本地批量上传整期成品包。</small></span>
+                  <em>推荐</em>
+                </label>
+              </div>
+            </div>
           </section>
           </div>
 
           <div class="wizard-stage" data-step-panel="2" hidden>
-          <section class="panel upload-panel stage-panel" aria-labelledby="upload-title">
+          <section id="standard-upload-panel" class="panel upload-panel stage-panel" aria-labelledby="upload-title" hidden>
             <div class="section-heading">
               <span class="section-index">02</span>
               <div><h2 id="upload-title">上传文章文件</h2><p>支持多选。系统会按文章标题将不同格式正文归到同一篇文章。</p></div>
@@ -160,14 +197,36 @@
               <span>识别依据</span> 系统会清理文件名中的格式后缀和版本标记，再匹配相似标题；低置信度文件将标记为“需确认”。你可以在文件右侧手动更改所属文章。
             </div>
           </section>
-          <aside class="stage-tip">
+          <aside id="standard-upload-tip" class="stage-tip" hidden>
             <span>提示</span>
             <p>文件识别完成后，可进入下一步调整归组。正文文件不会在切换步骤时丢失。</p>
           </aside>
+
+          <section id="issue-source-panel" class="panel issue-source-panel stage-panel" aria-labelledby="issue-source-title">
+            <div class="section-heading">
+              <span class="section-index">02</span>
+              <div><h2 id="issue-source-title">选择整期文件</h2><p>可从 FTP 多选，也可从本地批量上传 ZIP。</p></div>
+            </div>
+
+            <div class="ftp-toolbar">
+              <div class="ftp-connection"><span class="connection-dot"></span><span><strong>期刊生产 FTP</strong><small>连接正常</small></span></div>
+              <label class="ftp-search"><span>搜索</span><input id="ftp-search-input" type="search" placeholder="输入文件名" /></label>
+              <button id="refresh-ftp-button" class="secondary-button" type="button">刷新列表</button>
+              <button id="local-issue-button" class="secondary-button local-issue-button" type="button">本地上传</button>
+            </div>
+
+            <div class="ftp-list-head" aria-hidden="true"><span>选择</span><span>压缩包文件</span><span>文件大小</span><span>更新时间</span><span>状态</span></div>
+            <div id="ftp-file-list" class="ftp-file-list" role="group" aria-label="FTP 整期压缩包列表"></div>
+
+            <div id="issue-parse-panel" class="issue-parse-panel" aria-live="polite">
+              <div class="parse-result-heading"><span>✓</span><div><strong id="parse-result-title">已解析 2 期</strong><small id="parse-source-name">请检查每期的期刊与年卷期</small></div></div>
+              <div id="issue-parse-list" class="issue-parse-list"></div>
+            </div>
+          </section>
           </div>
 
           <div class="wizard-stage" data-step-panel="3" hidden>
-          <section class="articles-section stage-panel" aria-labelledby="article-list-title">
+          <section id="standard-article-panel" class="articles-section stage-panel" aria-labelledby="article-list-title" hidden>
             <div class="article-section-head">
               <div class="section-heading compact">
                 <span class="section-index">03</span>
@@ -182,6 +241,14 @@
             </div>
             <div id="article-list" class="article-list"></div>
           </section>
+
+          <section id="issue-assets-panel" class="panel issue-assets-panel stage-panel" aria-labelledby="issue-assets-title">
+            <div class="section-heading">
+              <span class="section-index">03</span>
+              <div><h2 id="issue-assets-title">上传封面与目录</h2><p>补充整期上线所需文件。</p></div>
+            </div>
+            <div id="issue-assets-list" class="issue-assets-list"></div>
+          </section>
           </div>
 
           <div class="wizard-stage" data-step-panel="4" hidden>
@@ -190,7 +257,7 @@
                 <span class="confirmation-check" aria-hidden="true">
                   <svg viewBox="0 0 24 24"><path d="m6 12 4 4 8-9"/></svg>
                 </span>
-                <div><span class="page-kicker">READY TO CREATE</span><h2 id="confirmation-title">确认生产任务</h2><p>请最后核对发布类型与文章清单，确认后任务将进入生产流程。</p></div>
+                <div><span id="confirmation-kicker" class="page-kicker">READY TO CREATE</span><h2 id="confirmation-title">确认生产任务</h2><p>请最后核对发布类型与文章清单，创建后由管理员初审并分发。</p></div>
               </div>
               <div id="confirmation-summary" class="confirmation-summary"></div>
             </section>
@@ -198,9 +265,9 @@
         </main>
 
         <footer class="action-bar">
-          <div class="validation-note">
+          <div class="validation-note" aria-live="polite">
             <span id="validation-icon">✓</span>
-            <p><strong id="validation-title">所有必填信息已完整</strong><small id="validation-copy">创建后，2 篇文章将进入正式出版生产流程。</small></p>
+            <p><strong id="validation-title">所有必填信息已完整</strong><small id="validation-copy">创建后任务将进入待初审。</small></p>
           </div>
           <div>
             <button id="back-button" class="secondary-button" type="button" hidden><span>←</span> 上一步</button>
@@ -213,6 +280,9 @@
 
     <div id="toast-region" class="toast-region" aria-live="polite"></div>
     <input id="attachment-input" type="file" multiple hidden />
-    <script src="/static/production-task.js"></script>
+    <input id="local-issue-input" type="file" accept=".zip,application/zip" multiple hidden />
+    <input id="cover-file-input" type="file" accept=".pdf,.jpg,.jpeg,.png" hidden />
+    <input id="contents-file-input" type="file" accept=".pdf,.doc,.docx,.xml" hidden />
+    <script src="/static/production-task.js?v=20260828-6"></script>
   </body>
 </html>

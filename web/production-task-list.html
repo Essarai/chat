@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f5f7fb" />
+    <title>我的生产任务 · 刊行</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/remixicon@4.6.0/fonts/remixicon.css" />
+    <link rel="stylesheet" href="/static/production-task-list.css?v=20260828-4" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="journal-select">
+          <span class="journal-monogram">浙</span>
+          <div><small>当前期刊</small><strong>浙江大学学报（农业与生命科学版）</strong></div>
+          <button type="button" aria-label="切换期刊"><i class="ri-arrow-down-s-line" aria-hidden="true"></i></button>
+        </div>
+        <div class="top-actions">
+          <button class="icon-button" type="button" aria-label="通知"><i class="ri-notification-3-line" aria-hidden="true"></i><span></span></button>
+          <span class="top-divider"></span>
+          <button id="user-menu" class="user-menu" type="button" aria-haspopup="menu" aria-expanded="false">
+            <span id="current-avatar" class="avatar">林</span>
+            <span><strong id="current-user-name">林编辑</strong><small id="current-user-role">责任编辑</small></span>
+            <i class="ri-arrow-down-s-line" aria-hidden="true"></i>
+          </button>
+          <section id="role-switcher" class="role-switcher" role="menu" aria-label="切换工作台" hidden>
+            <header><span>切换工作台</span><small>仅展示当前账号已获得的角色</small></header>
+            <button class="active" type="button" role="menuitem" data-role="editor">
+              <span class="role-avatar editor">林</span><span><strong>林编辑</strong><small>编辑工作台</small></span><i class="ri-check-line" aria-hidden="true"></i>
+            </button>
+            <button type="button" role="menuitem" data-role="admin">
+              <span class="role-avatar admin">管</span><span><strong>管理员</strong><small>审核管理工作台</small></span><i class="ri-check-line" aria-hidden="true"></i>
+            </button>
+            <button type="button" role="menuitem" data-role="company">
+              <span class="role-avatar company">科</span><span><strong>科睿</strong><small>生产公司工作台</small></span><i class="ri-check-line" aria-hidden="true"></i>
+            </button>
+          </section>
+        </div>
+      </header>
+
+      <div class="task-workspace detail-closed" id="task-workspace">
+        <main class="task-main">
+          <section class="page-heading">
+            <div>
+              <nav class="breadcrumb" aria-label="面包屑"><a href="/static/production-task-list.html">生产任务</a><span>/</span><span id="breadcrumb-role">我的生产任务</span></nav>
+              <h1 id="page-title">我的生产任务</h1>
+              <p id="page-subtitle">查看并处理编辑角色负责的生产任务</p>
+            </div>
+            <a id="create-task-link" class="page-switch-button" href="/static/production-task.html">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+              创建生产任务
+            </a>
+          </section>
+
+          <nav class="scope-tabs" aria-label="任务范围">
+            <button class="active" type="button" data-scope="todo"><b>待我处理</b> <span>0</span></button>
+            <button type="button" data-scope="all"><b>全部任务</b> <span>0</span></button>
+            <button type="button" data-scope="progress"><b>进行中</b> <span>0</span></button>
+            <button type="button" data-scope="closed"><b>已结束</b> <span>0</span></button>
+          </nav>
+
+          <section class="filter-bar" aria-label="任务查询">
+            <label class="search-field">
+              <i class="ri-search-line" aria-hidden="true"></i>
+              <input id="task-search" type="search" placeholder="搜索标题、DOI、任务编号、年卷期" />
+            </label>
+            <label class="filter-field"><span>创建类型</span><select id="kind-filter"><option value="all">全部</option><option value="single">按篇·单篇</option><option value="multi">按篇·多篇</option><option value="issue">按期</option></select></label>
+            <label class="filter-field"><span>发布类型</span><select id="publication-filter"><option value="all">全部</option><option value="正式出版">正式出版</option><option value="优先出版">优先出版</option><option value="最新录用">最新录用</option></select></label>
+            <button id="more-filter-button" class="filter-button" type="button"><i class="ri-filter-3-line" aria-hidden="true"></i>更多筛选</button>
+            <div id="more-filter-popover" class="filter-popover" hidden>
+              <label>任务状态<select id="status-filter"><option value="all">全部状态</option><option value="创建">创建</option><option value="待初审">待初审</option><option value="加工中">加工中</option><option value="待确认">待确认</option><option value="待复审">待复审</option><option value="已发布">已发布</option><option value="已下架">已下架</option></select></label>
+              <button id="clear-filter-button" type="button">重置条件</button>
+            </div>
+          </section>
+
+          <section class="task-table" aria-label="任务列表">
+            <div class="task-table-head"><span>任务信息</span><span>当前状态</span><span>出版类型</span><span id="role-column-title">当前处理人</span><span>更新时间</span></div>
+            <div id="task-list" class="task-list"></div>
+            <div id="empty-state" class="empty-state" hidden><i class="ri-file-search-line" aria-hidden="true"></i><strong>未找到匹配任务</strong><span>尝试调整搜索内容或筛选条件</span><button type="button">清除筛选</button></div>
+          </section>
+
+          <footer class="list-footer">
+            <span id="result-count">共 10 条</span>
+            <div class="pagination">
+              <label><select aria-label="每页数量"><option>10 条/页</option><option>20 条/页</option></select></label>
+              <button type="button" aria-label="上一页"><i class="ri-arrow-left-s-line" aria-hidden="true"></i></button>
+              <button class="active" type="button">1</button><button type="button">2</button><button type="button">3</button>
+              <button type="button" aria-label="下一页"><i class="ri-arrow-right-s-line" aria-hidden="true"></i></button>
+            </div>
+          </footer>
+        </main>
+
+        <aside id="detail-panel" class="detail-panel" aria-label="任务详情">
+          <header class="detail-head">
+            <div><h2 id="detail-title"></h2><div class="detail-meta"><span>任务编号</span><strong id="detail-id"></strong><button id="copy-task-id" type="button" aria-label="复制任务编号"><i class="ri-file-copy-line" aria-hidden="true"></i></button></div></div>
+            <button id="close-detail-button" class="close-button" type="button" aria-label="关闭详情"><i class="ri-close-line" aria-hidden="true"></i></button>
+            <div class="detail-state-line"><span>当前状态</span><b id="detail-status" class="status-badge"></b><span>当前处理人</span><strong id="detail-handler"></strong></div>
+          </header>
+
+          <div id="flow-track" class="flow-track" aria-label="生产任务主流程"></div>
+
+          <nav class="detail-tabs" aria-label="详情内容">
+            <button type="button" data-detail-tab="overview">任务概览</button>
+            <button type="button" data-detail-tab="files">文件与文章</button>
+            <button class="active" type="button" data-detail-tab="records">流转记录</button>
+          </nav>
+
+          <div id="detail-content" class="detail-content"></div>
+
+          <footer class="detail-actions">
+            <button id="full-detail-button" class="secondary-button" type="button">查看完整详情</button>
+            <button id="review-product-button" class="primary-button" type="button">确认产物<i class="ri-arrow-right-line" aria-hidden="true"></i></button>
+          </footer>
+        </aside>
+      </div>
+    </div>
+
+    <div id="review-modal" class="modal-backdrop" hidden>
+      <section class="review-modal" role="dialog" aria-modal="true" aria-labelledby="review-title">
+        <header><div><span>成品确认</span><h2 id="review-title">审核生产公司提交的成品</h2></div><button id="close-review-button" type="button" aria-label="关闭"><i class="ri-close-line" aria-hidden="true"></i></button></header>
+        <div class="review-summary"><i class="ri-building-4-line" aria-hidden="true"></i><span><strong>科睿</strong><small>2026-08-27 09:15 提交 · 成品版本 V1.0</small></span></div>
+        <div class="product-files">
+          <div><span class="file-icon pdf">PDF</span><span><strong>水稻抗旱相关基因的功能分析_成品.pdf</strong><small>12.8 MB · 生产成品</small></span><button type="button">预览</button></div>
+          <div><span class="file-icon xml">XML</span><span><strong>水稻抗旱相关基因的功能分析.xml</strong><small>184 KB · 结构化文件</small></span><button type="button">下载</button></div>
+        </div>
+        <label class="review-note"><span>确认意见</span><textarea id="review-note" placeholder="通过时可选；退回加工时必须填写具体原因"></textarea></label>
+        <footer><button id="return-product-button" class="danger-button" type="button">退回加工</button><button id="approve-product-button" class="primary-button" type="button">确认通过并提交复审</button></footer>
+      </section>
+    </div>
+
+    <div id="admin-review-modal" class="modal-backdrop" hidden>
+      <section class="review-modal operation-modal" role="dialog" aria-modal="true" aria-labelledby="admin-review-title">
+        <header><div><span>管理员初审</span><h2 id="admin-review-title">审核并分发生产任务</h2></div><button data-close-modal="admin-review-modal" type="button" aria-label="关闭"><i class="ri-close-line" aria-hidden="true"></i></button></header>
+        <div class="operation-task"><i class="ri-file-check-line" aria-hidden="true"></i><span><strong id="admin-review-task"></strong><small>核对源文件后选择加工类型与生产公司</small></span></div>
+        <div class="operation-form two-column">
+          <label><span>加工类型 <em>*</em></span><select id="processing-type"><option>无需加工</option><option>全文XML</option><option>元数据</option></select></label>
+          <label><span>生产公司 <em>*</em></span><select id="production-company"><option>科睿</option></select></label>
+          <label><span>要求完成时间</span><input id="processing-deadline" type="date" value="2026-09-03" /></label>
+          <label><span>问题范围</span><select id="review-scope"><option>整个任务</option><option>指定文章或文件</option></select></label>
+          <label class="wide"><span>审核意见</span><textarea id="admin-review-note" placeholder="通过时可选；驳回时必须填写具体问题"></textarea></label>
+        </div>
+        <footer><button id="admin-reject-button" class="danger-button" type="button">驳回编辑</button><button id="admin-dispatch-button" class="primary-button" type="button">通过并分发</button></footer>
+      </section>
+    </div>
+
+    <div id="final-review-modal" class="modal-backdrop" hidden>
+      <section class="review-modal operation-modal" role="dialog" aria-modal="true" aria-labelledby="final-review-title">
+        <header><div><span>管理员复审</span><h2 id="final-review-title">预览并确认发布</h2></div><button data-close-modal="final-review-modal" type="button" aria-label="关闭"><i class="ri-close-line" aria-hidden="true"></i></button></header>
+        <div class="web-preview-card"><i class="ri-global-line" aria-hidden="true"></i><span><strong id="final-review-task"></strong><small>网页预览已生成 · 内容与生产成品一致</small></span><button type="button">打开预览</button></div>
+        <div class="operation-form">
+          <fieldset class="channel-field"><legend>发布渠道 <em>*</em></legend><label><input type="checkbox" name="publish-channel" value="期刊官网" checked />期刊官网</label><label><input type="checkbox" name="publish-channel" value="微信公众号" />微信公众号</label><label><input type="checkbox" name="publish-channel" value="数据库同步" checked />数据库同步</label></fieldset>
+          <label><span>驳回目标</span><select id="final-reject-target"><option value="待确认">退回编辑确认</option><option value="加工中">退回生产公司</option><option value="创建">退回编辑修改源文件</option></select></label>
+          <label><span>复审意见</span><textarea id="final-review-note" placeholder="发布时可选；驳回时必须填写原因"></textarea></label>
+        </div>
+        <footer><button id="final-reject-button" class="danger-button" type="button">驳回</button><button id="publish-button" class="primary-button" type="button">通过并发布</button></footer>
+      </section>
+    </div>
+
+    <div id="company-work-modal" class="modal-backdrop" hidden>
+      <section class="review-modal company-work-modal" role="dialog" aria-modal="true" aria-labelledby="company-work-title">
+        <header><div><span>生产加工</span><h2 id="company-work-title">加工并提交产物</h2></div><button data-close-modal="company-work-modal" type="button" aria-label="关闭"><i class="ri-close-line" aria-hidden="true"></i></button></header>
+        <div class="assignment-strip"><span><b>加工类型</b><strong id="company-processing-type"></strong></span><span><b>要求完成</b><strong id="company-deadline">2026-09-03</strong></span><span><b>任务编号</b><strong id="company-task-id"></strong></span></div>
+        <section class="work-files"><div class="work-section-title"><span>源文件</span><small>管理员分发后可下载，源文件已锁定</small></div><div id="company-source-files"></div></section>
+        <section class="work-files"><div class="work-section-title"><span>产物文件</span><small>支持 PDF、XML、ZIP，可多选</small></div><label class="company-upload-zone"><input id="company-output-input" type="file" accept=".pdf,.xml,.zip" multiple /><i class="ri-upload-cloud-2-line" aria-hidden="true"></i><span><strong>选择或拖入产物文件</strong><small>也可以加载示例产物完成 Mock 流程</small></span></label><button id="load-output-demo" class="text-action" type="button">加载示例产物</button><div id="company-output-list" class="company-output-list"></div></section>
+        <label class="review-note"><span>加工备注 / 退回原因</span><textarea id="company-work-note" placeholder="提交产物时可选；退回编辑时必须填写具体问题"></textarea></label>
+        <footer><button id="company-return-button" class="danger-button" type="button">退回编辑</button><button id="company-submit-button" class="primary-button" type="button" disabled>提交编辑确认</button></footer>
+      </section>
+    </div>
+
+    <div id="unpublish-modal" class="modal-backdrop" hidden>
+      <section class="review-modal compact-modal" role="dialog" aria-modal="true" aria-labelledby="unpublish-title">
+        <header><div><span>发布管理</span><h2 id="unpublish-title">下架已发布任务</h2></div><button data-close-modal="unpublish-modal" type="button" aria-label="关闭"><i class="ri-close-line" aria-hidden="true"></i></button></header>
+        <label class="review-note"><span>下架原因 <em>*</em></span><textarea id="unpublish-note" placeholder="填写下架原因，操作后任务将终止"></textarea></label>
+        <footer><button data-close-modal="unpublish-modal" class="secondary-button" type="button">取消</button><button id="confirm-unpublish-button" class="danger-button" type="button">确认下架</button></footer>
+      </section>
+    </div>
+
+    <div id="toast-region" class="toast-region" aria-live="polite"></div>
+    <script src="/static/production-task-list.js?v=20260828-7"></script>
+  </body>
+</html>
